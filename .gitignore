@@ -1,0 +1,84 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+*.png
+screenshot.png
+
+# local env files
+.env*.local
+.env
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# OS generated files
+Thumbs.db
+.DS_Store
+
+# Ignore huge generated map data (optional: remove these if you want to commit the map data to GitHub)
+# /public/maps/xplane/
+# /public/maps/lax_experiment/
+tsconfig.tsbuildinfo
+
+!docs/qa/*.png
+.tmp/
+
+# QA walk evidence (docs/qa/w2) is kept alongside the report
+!docs/qa/**/*.png
+
+# Playwright e2e output (scripts/e2e.sh)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.scratch-e2e/
+
+# TTS benchmark (ml/tts): venvs, downloads, build output, generated clips
+ml/tts/venvs/
+ml/tts/cache/
+ml/tts/.build/
+ml/tts/out/
+ml/tts/.build-test/
+
+# command-model checkpoints under evaluation (ml/s1/freeword/watch.py)
+/public/models/s1-cand/
+data/reports/

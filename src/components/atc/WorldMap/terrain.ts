@@ -1,0 +1,609 @@
+/*
+  Scene builders for the procedural world: terrain (height + land shading in a shader), water, roads, buildings,
+  airport surfaces with generated markings. three.js frame: x = east, y = up, z = -north (metres).
+*/
+import * as THREE from 'three';
+import type { World } from './world';
+import type { OsmAirport } from '@/lib/osmAirport';
+
+export const toV3 = (x: number, y: number, h: number) => new THREE.Vector3(x, h, -y);
+
+/** Materials whose opacity fades with camera distance (detail lines vanish when zoomed out, like a game map LOD). */
+export interface Fade { mat: THREE.Material & { opacity: number }; base: number; near: number; far: number }
+export function applyFades(fades: Fade[], dist: number): void {
+  for (const f of fades) { const t = 1 - Math.min(1, Math.max(0, (dist - f.near) / (f.far - f.near))); f.mat.opacity = f.base * t; f.mat.visible = t > 0.01; }
+}
+
+// ── palette (design 01 §1 / the TheTrail reference: muted greens, neutral greys, near-black water, orange accent) ──
+export const PALETTE = {
+  bg: 0x0b0b0c,
+  water: new THREE.Color('#16303a'),
+  waterDeep: new THREE.Color('#0b171f'),
+  waterShallow: new THREE.Color('#2b5a58'),
+  vegDark: new THREE.Color('#223a1d'),
+  veg: new THREE.Color('#3f7434'),
+  vegLight: new THREE.Color('#7c9e4f'),
+  field: new THREE.Color('#4c7238'),
+  urban: new THREE.Color('#4b4d4b'),
+  urbanLight: new THREE.Color('#7f817e'),
+  bare: new THREE.Color('#6b6558'),
+  scrub: new THREE.Color('#8a7b57'),
+  rock: new THREE.Color('#4f4d49'),
+  road: new THREE.Color('#d9d9d6'),
+  roadMinor: new THREE.Color('#8f9190'),
+  rail: new THREE.Color('#6a6c6b'),
+  asphalt: new THREE.Color('#585b5e'),
+  shoulder: new THREE.Color('#474a4c'),
+  concrete: new THREE.Color('#b3b4ae'),
+  marking: new THREE.Color('#e8e8e4'),
+  taxiLine: new THREE.Color('#e0b23a'),
+  building: new THREE.Color('#77797a'),
+  terminal: new THREE.Color('#c2c4c2'),
+  orange: new THREE.Color('#f5933f'),
+};
+
+const TERRAIN_VERT = /* glsl */ `
+  uniform sampler2D uHeight;
+  uniform vec4 uExtent;   // minX, minY(north), sizeX, sizeY
+  varying vec2 vUv;
+  varying vec3 vWorld;
+  void main() {
+    vUv = uv;
+    float h = texture2D(uHeight, uv).r;
+    vec3 p = vec3(position.x, h, position.z);
+    vWorld = p;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }`;
+
+const TERRAIN_FRAG = /* glsl */ `
+  precision highp float;
+  uniform sampler2D uHeight;
+  uniform sampler2D uLand;
+  uniform vec2 uTexel;       // 1/grid
+  uniform vec2 uMetersPerTexel;
+  uniform vec3 uLight;       // normalized, world space (toward the sun / moon)
+  uniform vec3 uSunColor;
+  uniform float uSunI, uHemiI, uDay, uWet;
+  uniform vec3 uCam;
+  uniform float uFogNear, uFogFar;
+  uniform vec3 uFog;
+  uniform vec4 uEdge;        // world extent in three space: minX, minZ, maxX, maxZ
+  uniform vec3 cWater, cWaterDeep, cWaterShallow, cScrub, cVegDark, cVeg, cVegLight, cUrban, cUrbanLight, cBare, cRock;
+  uniform float uTime;
+  uniform sampler2D uFieldMask;   // 1 inside the levelled airfield: grass between the surfaces, whatever the imagery says
+  uniform vec3 cField;
+  uniform sampler2D uGrass;       // tiling detail: r patches, g mown streaks (along +x), b blade grain, a tree crowns
+  uniform vec2 uMow;              // unit vector of the mowing direction (the main runway), world xz
+  varying vec2 vUv;
+  varying vec3 vWorld;
+
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+  void main() {
+    // normal from the height field (central differences at texture resolution)
+    float hl = texture2D(uHeight, vUv - vec2(uTexel.x, 0.0)).r;
+    float hr = texture2D(uHeight, vUv + vec2(uTexel.x, 0.0)).r;
+    float hd = texture2D(uHeight, vUv - vec2(0.0, uTexel.y)).r;
+    float hu = texture2D(uHeight, vUv + vec2(0.0, uTexel.y)).r;
+    // height field h(east, north); three's z = -north, so a slope rising to the north tilts the normal to +z
+    // relief exaggerated x2 so gentle hills still read as shaded slopes from the map's steep viewing angles
+    vec3 n = normalize(vec3((hl - hr) / uMetersPerTexel.x, 1.0, (hu - hd) / uMetersPerTexel.y));
+    float slope = 1.0 - n.y;
+
+    float night = 1.0 - uDay;
+    vec4 land = texture2D(uLand, vUv);
+    float veg = land.r, bright = land.g, water = land.b, warm = land.a;   // warm: 0.5 neutral, above = tan scrub / soil
+    float h = vWorld.y;
+    float field = texture2D(uFieldMask, vUv).r;
+
+    // grass detail: one small tiling texture read at three scales (patches of drier grass ~200 m, mown streaks
+    // along the runway ~25 m, blade grain ~6 m) - a handful of texture fetches, no per-fragment noise maths
+    float d = distance(uCam, vWorld);
+    vec2 mowUv = vec2(dot(vWorld.xz, uMow), dot(vWorld.xz, vec2(-uMow.y, uMow.x)));
+    vec3 gM = texture2D(uGrass, vWorld.xz / 210.0).rgb;
+    float gM2 = texture2D(uGrass, mowUv / 730.0 + 0.37).r;       // second, rotated scale hides the tile repeat
+    vec4 gS = texture2D(uGrass, mowUv / 26.0);
+    float gF = texture2D(uGrass, vWorld.xz / 6.0).b;
+    float gPatch = 0.6 * gM.r + 0.4 * gM2;
+    float near = 1.0 - smoothstep(500.0, 2600.0, d);
+
+    // land colour: vegetation ramps, urban greys keyed by brightness, bare/rock on steep or high ground
+    vec3 vegCol = mix(cVegDark, cVeg, smoothstep(0.15, 0.6, veg));
+    vegCol = mix(vegCol, cVegLight, smoothstep(0.55, 0.95, veg) * 0.6);
+    // drier straw-coloured swathes where the cover is thin, dark tree crowns where it is dense
+    vec3 straw = vec3(0.58, 0.54, 0.33);
+    vegCol = mix(vegCol, mix(vegCol, straw, 0.55), smoothstep(0.5, 0.85, gPatch) * (1.0 - smoothstep(0.5, 0.8, veg)) * 0.75);
+    float canopy = gS.a * smoothstep(0.55, 0.9, veg);
+    vegCol *= 1.0 - 0.42 * canopy;
+    vegCol *= 0.92 + 0.16 * gS.g * (1.0 - smoothstep(0.55, 0.9, veg));   // faint field lines in open grassland
+    // unvegetated ground: grey streets and roofs where the imagery is neutral, tan scrub and bare soil where it is warm
+    vec3 urbanCol = mix(cUrban, cUrbanLight, smoothstep(0.2, 0.75, bright) * 0.25);
+    vec3 scrubCol = cScrub * (0.75 + 0.5 * bright) * (0.9 + 0.2 * gPatch);
+    scrubCol = mix(scrubCol, vegCol, 0.35 * smoothstep(0.02, 0.12, veg));                 // thin dry grass keeps a green cast
+    urbanCol = mix(urbanCol, scrubCol, smoothstep(0.54, 0.7, warm));
+    vec3 col = mix(urbanCol, vegCol, smoothstep(0.08, 0.45, veg));
+    // airfield grass: mown in strips along the runway, patchy where it has dried out, uneven in tone
+    vec3 fieldCol = cField * (0.9 + 0.2 * veg);
+    fieldCol = mix(fieldCol, fieldCol * vec3(1.18, 1.1, 0.8), smoothstep(0.45, 0.85, gPatch) * 0.5);
+    fieldCol *= 0.86 + 0.28 * gS.g;
+    fieldCol *= 1.0 - 0.18 * gS.a * step(0.55, gPatch);                 // odd darker clump
+    col = mix(col, fieldCol, field * 0.85);
+    col = mix(col, cBare, smoothstep(0.35, 0.7, slope * 2.2) * (1.0 - veg) * 0.7);
+    col = mix(col, cRock, smoothstep(320.0, 560.0, h) * 0.35);
+    // fine texture so flats do not read as plastic: blade grain on grass (fades with distance), coarse mottle elsewhere
+    float grassy = max(field, smoothstep(0.08, 0.45, veg));
+    col *= 1.0 + (gF - 0.5) * 0.3 * grassy * near + (gM.g - 0.5) * 0.12;
+
+    // lighting: sun + hemisphere, slopes toward the light lit, away in cool shadow
+    float ndl = clamp(dot(n, uLight), 0.0, 1.0);
+    float hemi = 0.55 + 0.45 * n.y;
+    vec3 lit = vec3(0.33 * hemi * uHemiI) + uSunColor * (ndl * uSunI);
+    col *= lit;
+    // shadow-side tint (cooler)
+    col = mix(col, col * vec3(0.85, 0.9, 1.05), (1.0 - ndl) * 0.35 * uDay);
+    // rain: darker, slightly glossy ground
+    col *= 1.0 - 0.22 * uWet;
+    // night: the city switches on — sparse warm lights on built-up texels plus a faint sodium haze
+    float urban = (1.0 - smoothstep(0.08, 0.4, veg)) * (1.0 - water) * (1.0 - field) * smoothstep(0.12, 0.35, bright);
+    vec2 cell = floor(vWorld.xz / 28.0);
+    float lamp = step(0.955, hash(cell)) * (0.6 + 0.4 * hash(cell + 3.1));
+    vec2 cellUv = fract(vWorld.xz / 28.0) - 0.5; float dot2 = 1.0 - smoothstep(0.0, 0.32, length(cellUv));
+    col += vec3(1.0, 0.72, 0.42) * lamp * dot2 * urban * night * 1.4;
+    col += vec3(0.32, 0.22, 0.12) * urban * night * 0.16;
+
+    // water: deep teal, paler and greener in the shallows along the shore (the mask read at a coarse mip level is a
+    // cheap distance-to-shore), slow large-scale tone variation (sediment), a wind-ruffled surface from two scrolling
+    // reads of the detail texture bending the normal, sun glitter on the ripples, sky reflection at grazing angles
+    vec3 viewDir = normalize(uCam - vWorld);
+    float waterWide = texture2D(uLand, vUv, 3.5).b;
+    float shallow = 1.0 - smoothstep(0.55, 1.0, waterWide);
+    vec2 w1 = texture2D(uGrass, vWorld.xz / 110.0 + vec2(uTime * 0.010, uTime * 0.004)).bg;
+    vec2 w2 = texture2D(uGrass, vWorld.xz / 27.0 - vec2(uTime * 0.018, -uTime * 0.026)).gb;
+    vec2 slopeW = (w1 + w2 - 1.0) * (0.05 + 0.07 * near);
+    vec3 nW = normalize(vec3(slopeW.x, 1.0, slopeW.y));
+    vec3 hv = normalize(viewDir + uLight);
+    float ndh = clamp(dot(nW, hv), 0.0, 1.0);
+    float spec = pow(ndh, 220.0), sheen = pow(ndh, 10.0);
+    float murk = texture2D(uGrass, mowUv / 900.0 + 0.61).r;
+    vec3 waterCol = mix(cWaterDeep, cWater, 0.3 + 0.7 * murk);
+    waterCol = mix(waterCol, cWaterShallow, shallow * (0.5 + 0.3 * murk));
+    waterCol *= 1.0 + (w1.x + w2.y - 1.0) * 0.12;
+    waterCol *= 0.3 + 0.7 * uDay;
+    waterCol += uSunColor * (spec * 0.3 + sheen * 0.012) * uSunI * (0.6 + 0.4 * uDay);
+    // the water reflects the sky at grazing angles (Fresnel): dark from above, a pale sheet toward the horizon
+    float fres = pow(1.0 - clamp(viewDir.y, 0.0, 1.0), 3.0);
+    waterCol = mix(waterCol, uFog, 0.5 * fres * (0.3 + 0.7 * uDay));
+    // soft shoreline: the mask is bilinear so the edge blends over ~1 texel; a pale sandy rim on the land side
+    float shore = smoothstep(0.2, 0.5, water) * (1.0 - smoothstep(0.5, 0.8, water));
+    col = mix(col, mix(col, vec3(0.55, 0.52, 0.42), 0.35), smoothstep(0.0, 0.35, water) * (1.0 - field) * 0.8);
+    col = mix(col, waterCol, smoothstep(0.35, 0.65, water));
+    col += shore * vec3(0.05, 0.06, 0.06);
+
+    // distance fog to the page background + a soft fade at the world's edge (no hard rectangle)
+    float fog = smoothstep(uFogNear, uFogFar, d);
+    vec2 e = min(vWorld.xz - uEdge.xy, uEdge.zw - vWorld.xz);
+    float edge = 1.0 - smoothstep(600.0, 3200.0, min(e.x, e.y));
+    col = mix(col, uFog, max(fog, edge));
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+export interface TerrainHandle { mesh: THREE.Mesh; uniforms: Record<string, THREE.IUniform> }
+
+/**
+ * Tiling grass detail (256 px, built once per page): r = gPatch noise (drier / greener swathes), g = streaks stretched
+ * along +x (mowing lines), b = fine blade grain, a = soft round clumps (tree crowns). Periodic value noise, so the
+ * tile wraps without a seam; the terrain shader reads it at three world scales.
+ */
+let grassTex: THREE.CanvasTexture | null = null;
+function grassTexture(size = 256): THREE.CanvasTexture {
+  if (grassTex) return grassTex;
+  let seed = 4242;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  // periodic value noise with a px x py lattice, smoothstep-interpolated
+  const lattice = (px: number, py: number) => { const g = new Float32Array(px * py); for (let i = 0; i < g.length; i++) g[i] = rnd(); return g; };
+  const sample = (g: Float32Array, px: number, py: number, x: number, y: number) => {
+    const fx = x * px, fy = y * py; const ix = Math.floor(fx), iy = Math.floor(fy);
+    let tx = fx - ix, ty = fy - iy; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const at = (i: number, j: number) => g[((j % py) + py) % py * px + ((i % px) + px) % px];
+    return (at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx) * (1 - ty) + (at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+  };
+  const p4 = lattice(4, 4), p8 = lattice(8, 8), p16 = lattice(16, 16);
+  const s1 = lattice(48, 3), s2 = lattice(96, 7);
+  const f64 = lattice(64, 64), f128 = lattice(128, 128);
+  const c12 = lattice(12, 12), c24 = lattice(24, 24);
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const ctx = c.getContext('2d')!; const img = ctx.createImageData(size, size);
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = x / size, v = y / size, i = (y * size + x) * 4;
+    const gPatch = sample(p4, 4, 4, u, v) * 0.5 + sample(p8, 8, 8, u, v) * 0.3 + sample(p16, 16, 16, u, v) * 0.2;
+    const streak = sample(s1, 48, 3, u, v) * 0.6 + sample(s2, 96, 7, u, v) * 0.4;
+    const grain = sample(f64, 64, 64, u, v) * 0.45 + sample(f128, 128, 128, u, v) * 0.35 + rnd() * 0.2;
+    const cl = sample(c12, 12, 12, u, v) * 0.6 + sample(c24, 24, 24, u, v) * 0.4;
+    const clump = Math.max(0, Math.min(1, (cl - 0.56) / 0.14));
+    img.data[i] = clamp(gPatch); img.data[i + 1] = clamp(streak); img.data[i + 2] = clamp(grain); img.data[i + 3] = clamp(clump);
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4; t.colorSpace = THREE.NoColorSpace;
+  t.minFilter = THREE.LinearMipmapLinearFilter; t.magFilter = THREE.LinearFilter; t.premultiplyAlpha = false;
+  grassTex = t; return t;
+}
+
+/** @param mowDeg direction the airfield grass is mown in (the main runway's true heading), degrees. */
+export function buildTerrain(world: World, segments = 512, mowDeg = 0): TerrainHandle {
+  const { extent } = world;
+  const w = extent.maxX - extent.minX, hgt = extent.maxY - extent.minY;
+  const geo = new THREE.PlaneGeometry(w, hgt, segments, segments);
+  geo.rotateX(-Math.PI / 2);                                  // XZ plane, +y up; uv (0,0) is the SW corner after the rotation
+  geo.translate((extent.minX + extent.maxX) / 2, 0, -(extent.minY + extent.maxY) / 2);
+  const uniforms: Record<string, THREE.IUniform> = {
+    uHeight: { value: world.heightTex }, uLand: { value: world.landTex },
+    uExtent: { value: new THREE.Vector4(extent.minX, extent.minY, w, hgt) },
+    uTexel: { value: new THREE.Vector2(1 / world.meta.grid, 1 / world.meta.grid) },
+    uMetersPerTexel: { value: new THREE.Vector2(w / world.meta.grid, hgt / world.meta.grid) },
+    uLight: { value: new THREE.Vector3(-0.55, 0.62, 0.55).normalize() },
+    uSunColor: { value: new THREE.Color('#fff3e0') }, uSunI: { value: 1.0 }, uHemiI: { value: 1.0 }, uDay: { value: 1 }, uWet: { value: 0 },
+    uCam: { value: new THREE.Vector3() },
+    uFogNear: { value: 9000 }, uFogFar: { value: 32000 }, uFog: { value: new THREE.Color(PALETTE.bg) },
+    uEdge: { value: new THREE.Vector4(extent.minX, -extent.maxY, extent.maxX, -extent.minY) },
+    uTime: { value: 0 },
+    uFieldMask: { value: world.fieldTex }, cField: { value: PALETTE.field },
+    uGrass: { value: grassTexture() }, uMow: { value: new THREE.Vector2(Math.sin(mowDeg * Math.PI / 180), -Math.cos(mowDeg * Math.PI / 180)) },
+    cWater: { value: PALETTE.water }, cWaterDeep: { value: PALETTE.waterDeep }, cWaterShallow: { value: PALETTE.waterShallow }, cScrub: { value: PALETTE.scrub }, cVegDark: { value: PALETTE.vegDark }, cVeg: { value: PALETTE.veg },
+    cVegLight: { value: PALETTE.vegLight }, cUrban: { value: PALETTE.urban }, cUrbanLight: { value: PALETTE.urbanLight }, cBare: { value: PALETTE.bare }, cRock: { value: PALETTE.rock },
+  };
+  const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: TERRAIN_VERT, fragmentShader: TERRAIN_FRAG });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;
+  mesh.name = 'terrain';
+  return { mesh, uniforms };
+}
+
+// ── polylines draped on the terrain ──────────────────────────────────────────
+function drapedSegments(world: World, lines: [number, number][][], lift: number, step = 60): Float32Array {
+  const out: number[] = [];
+  const ex = world.extent, margin = 2200;
+  const inner = (x: number, y: number) => x > ex.minX + margin && x < ex.maxX - margin && y > ex.minY + margin && y < ex.maxY - margin;
+  for (const line of lines) {
+    let prev: THREE.Vector3 | null = null;
+    for (let i = 0; i < line.length; i++) {
+      const p = world.toLocal(line[i][0], line[i][1]);
+      if (!inner(p.x, p.y)) { prev = null; continue; }
+      const cur = toV3(p.x, p.y, world.heightAt(p.x, p.y) + lift);
+      if (prev) {
+        // subdivide long segments so the line follows the relief
+        const len = prev.distanceTo(cur), n = Math.max(1, Math.min(40, Math.ceil(len / step)));
+        let a = prev;
+        for (let k = 1; k <= n; k++) {
+          const t = k / n;
+          const x = prev.x + (cur.x - prev.x) * t, z = prev.z + (cur.z - prev.z) * t;
+          const b = k === n ? cur : new THREE.Vector3(x, world.heightAt(x, -z) + lift, z);
+          out.push(a.x, a.y, a.z, b.x, b.y, b.z); a = b;
+        }
+      }
+      prev = cur;
+    }
+  }
+  return new Float32Array(out);
+}
+
+/** Road detail: metres between relief samples along a line (60 = every bend follows the terrain), and whether the
+ *  secondary streets are drawn at all (the low tier drops them - they fade out beyond 7 km anyway). */
+export interface RoadDetail { step: number; minor: boolean }
+export function buildRoads(world: World, fades: Fade[], detail: RoadDetail = { step: 60, minor: true }): THREE.Group {
+  const g = new THREE.Group(); g.name = 'roads';
+  const r = world.vectors.roads;
+  const add = (lines: [number, number][][], color: THREE.Color, opacity: number, lift: number, near: number, far: number) => {
+    if (!lines.length) return;
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(drapedSegments(world, lines, lift, detail.step), 3));
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+    const m = new THREE.LineSegments(geo, mat); m.frustumCulled = false; g.add(m);
+    fades.push({ mat, base: opacity, near, far });
+  };
+  if (detail.minor) add(r.secondary, PALETTE.roadMinor, 0.3, 1.2, 2500, 7000);
+  add(r.primary, PALETTE.roadMinor, 0.5, 1.4, 5000, 14000);
+  add(r.rail, PALETTE.rail, 0.5, 1.4, 6000, 20000);
+  add([...r.trunk, ...r.motorway], PALETTE.road, 0.6, 1.8, 12000, 45000);
+  return g;
+}
+
+// ── buildings (extruded footprints) ──────────────────────────────────────────
+export interface BuildingsHandle { mesh: THREE.Mesh; material: THREE.MeshLambertMaterial; shadows: THREE.Mesh; setSun(dir: THREE.Vector3, day: number, cloud: number): void }
+
+/** `maxBuildings`: budget for the world's buildings (the airport's own terminals / hangars are always kept) - the
+ *  biggest and nearest footprints win, so the terminals' surroundings and the skyline stay while a far suburb of small
+ *  houses (KLAX has 3 700 footprints) is dropped on the lower tiers. */
+export function buildBuildings(world: World, air?: OsmAirport, maxBuildings = Infinity): BuildingsHandle {
+  const geos: THREE.BufferGeometry[] = [];
+  const colors: number[] = []; const info: number[] = [];   // per vertex: base y, height, kind (0 building / 1 terminal / 2 hangar), seed
+  // The world layer only carries OSM building WAYS; terminals mapped as relations or tagged aeroway=terminal without
+  // building=* are missing from it - yet the gates, bridges and apron are laid out against exactly those outlines. So
+  // the airport data's terminal / hangar polygons are extruded too, skipping the ones the world layer already has
+  // (same centroid and a similar footprint).
+  let list: { p: [number, number][]; h: number | null; k: 'terminal' | 'hangar' | 'b' }[] = world.vectors.buildings.slice();
+  if (list.length > maxBuildings) {
+    const ranked = list.map((b) => {
+      const pts = b.p.map(([lng, lat]) => world.toLocal(lng, lat)); const cx = pts.reduce((q, v) => q + v.x, 0) / pts.length, cy = pts.reduce((q, v) => q + v.y, 0) / pts.length;
+      return { b, score: polyAreaM2(pts) * (b.h ?? 7) / (1 + Math.hypot(cx, cy) / 4000) };
+    });
+    ranked.sort((x, y) => y.score - x.score);
+    list = ranked.slice(0, maxBuildings).map(x => x.b);
+  }
+  if (air) {
+    const worldC = world.vectors.buildings.map(b => { const pts = b.p.map(([lng, lat]) => world.toLocal(lng, lat)); const cx = pts.reduce((s, q) => s + q.x, 0) / pts.length, cy = pts.reduce((s, q) => s + q.y, 0) / pts.length; return { cx, cy, area: polyAreaM2(pts) }; });
+    for (const b of air.buildings) {
+      if (b.kind === 'apron' || b.polygon.length < 4) continue;
+      const c = world.toLocal(b.centroid.lng, b.centroid.lat);
+      const dup = worldC.some(w => Math.hypot(w.cx - c.x, w.cy - c.y) < 25 && w.area > b.areaM2 * 0.6 && w.area < b.areaM2 * 1.6);
+      if (dup) continue;
+      list.push({ p: b.polygon.map(q => [q.lng, q.lat] as [number, number]), h: null, k: b.kind === 'terminal' ? 'terminal' : 'hangar' });
+    }
+  }
+  const tmpC = new THREE.Color();
+  for (const b of list) {
+    const pts = b.p.map(([lng, lat]) => world.toLocal(lng, lat));
+    if (pts.length < 4) continue;
+    const shape = new THREE.Shape(pts.map(p => new THREE.Vector2(p.x, p.y)));   // (east, north); rotateX(-90°) maps north to -z
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    const base = world.heightAt(cx, cy);
+    const h = b.h ?? (b.k === 'terminal' ? 15 : b.k === 'hangar' ? 14 : 7);
+    const geo = new THREE.ExtrudeGeometry(shape, { depth: h, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);                 // extrude along +y
+    geo.translate(0, base, 0);
+    // a stable per-building seed varies the tint (warm / cool greys) so a district is not one flat colour
+    const seed = ((Math.sin(cx * 0.013 + cy * 0.031) * 43758.5453) % 1 + 1) % 1;
+    const kind = b.k === 'terminal' ? 1 : b.k === 'hangar' ? 2 : 0;
+    tmpC.copy(b.k === 'terminal' ? PALETTE.terminal : PALETTE.building);
+    if (kind === 0) tmpC.offsetHSL((seed - 0.5) * 0.06, 0, (seed - 0.5) * 0.12);
+    else if (kind === 2) tmpC.offsetHSL(0, 0, -0.04);
+    // roofs a shade lighter than the walls so the blocks read as volumes from the tilted camera
+    const n = geo.getAttribute('position').count; const nor = geo.getAttribute('normal');
+    for (let i = 0; i < n; i++) { const k = nor.getY(i) > 0.5 ? 1.1 : 0.86; colors.push(tmpC.r * k, tmpC.g * k, tmpC.b * k); info.push(base, h, kind, seed); }
+    geos.push(geo);
+  }
+  const merged = mergeGeometries(geos);
+  merged.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  merged.setAttribute('aInfo', new THREE.Float32BufferAttribute(info, 4));
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  // Facade detail in the shader (no extra geometry): floor slabs and window columns on the walls, glazing on terminals,
+  // a parapet band and contact shading at the base, panel seams + rooftop units on the roofs; at night rows of lit windows
+  // (world-space cells, a stable hash decides which are lit).
+  const uNight = { value: 0 }; mat.userData.uNight = uNight;
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uNight = uNight;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 aInfo;\nvarying vec4 vInfo;\nvarying vec3 vWPos;\nvarying vec3 vWNormal;')
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\nvWNormal = normalize(mat3(modelMatrix) * objectNormal);')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvInfo = aInfo;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec4 vInfo;\nvarying vec3 vWPos;\nvarying vec3 vWNormal;\nuniform float uNight;\nfloat bhash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          float wall = 1.0 - smoothstep(0.35, 0.65, abs(vWNormal.y));
+          float roof = smoothstep(0.35, 0.65, vWNormal.y);
+          float hgt = max(vInfo.y, 1.0); float t = clamp((vWPos.y - vInfo.x) / hgt, 0.0, 1.0);
+          float terminal = step(0.5, vInfo.z) * step(vInfo.z, 1.5);
+          vec2 tng = normalize(vec2(-vWNormal.z, vWNormal.x) + vec2(1e-4, 0.0));
+          float along = dot(vWPos.xz, tng);
+          float floorF = fract((vWPos.y - vInfo.x) / 3.6), colF = fract(along / 3.4);
+          // window band: terminals are glazed curtain walls (wide band), others have punched windows
+          // terminals: a curtain wall from the apron level to the roof line, thin mullions every 4.5 m, a spandrel at mid height
+          float mull = fract(along / 4.5);
+          float tGlass = step(0.16, t) * step(t, 0.86) * step(0.035, mull) * (1.0 - 0.6 * step(0.47, t) * step(t, 0.52));
+          float wx = step(0.18, colF) * step(colF, 0.82);
+          float wy = step(0.28, floorF) * step(floorF, 0.78);
+          float win = mix(wx * wy, tGlass, terminal) * step(2.5, hgt);
+          vec3 glass = mix(vec3(0.40, 0.47, 0.55), vec3(0.58, 0.66, 0.74), t) * (0.94 + 0.12 * bhash(vec2(floor(along / 3.4), floor((vWPos.y - vInfo.x) / 3.6)) + vInfo.w));
+          glass = mix(glass, mix(vec3(0.16, 0.25, 0.31), vec3(0.34, 0.47, 0.55), t), terminal);
+          diffuseColor.rgb = mix(diffuseColor.rgb, glass, win * wall * mix(0.38, 0.95, terminal));
+          // floor slabs, parapet band, contact shading at the base
+          diffuseColor.rgb *= 1.0 - 0.16 * wall * (1.0 - smoothstep(0.0, 0.08, floorF)) * step(2.5, hgt) * (1.0 - terminal);
+          diffuseColor.rgb *= 1.0 - 0.18 * wall * smoothstep(0.9, 0.97, t);
+          diffuseColor.rgb *= 1.0 - 0.28 * wall * (1.0 - smoothstep(0.0, 0.15, t));
+          // roof: membrane panel seams + darker rooftop plant in some cells; terminals get skylight strips
+          vec2 rp = vWPos.xz / 6.0; vec2 rf = fract(rp);
+          float seam = 1.0 - smoothstep(0.0, 0.05, min(min(rf.x, 1.0 - rf.x), min(rf.y, 1.0 - rf.y)));
+          diffuseColor.rgb *= 1.0 - 0.07 * roof * seam * (1.0 - terminal);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.80, 0.81, 0.80) * (0.97 + 0.03 * step(0.5, fract(vWPos.x / 1.6))), roof * terminal);
+          vec2 uc = floor(vWPos.xz / 11.0); vec2 uf = fract(vWPos.xz / 11.0);
+          float unit = step(0.86, bhash(uc + vInfo.w * 3.0)) * step(0.25, uf.x) * step(uf.x, 0.65) * step(0.3, uf.y) * step(uf.y, 0.7);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72, unit * roof * step(60.0, hgt * hgt) * (1.0 - terminal));
+          // terminal roofs: a pale membrane in broad bays, small plant here and there
+          float bay = bhash(floor(vWPos.xz / 24.0) + vInfo.w);
+          diffuseColor.rgb *= 1.0 + terminal * roof * (bay - 0.5) * 0.05;
+          vec2 pf = fract(vWPos.xz / 24.0);
+          float plant = step(0.9, bay) * step(0.35, pf.x) * step(pf.x, 0.55) * step(0.3, pf.y) * step(pf.y, 0.62);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.44, 0.46), plant * roof * terminal);
+        }`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        {
+          float wall = 1.0 - smoothstep(0.35, 0.65, abs(vWNormal.y));
+          vec2 tng = normalize(vec2(-vWNormal.z, vWNormal.x) + vec2(1e-4, 0.0));
+          float along = dot(vWPos.xz, tng);
+          vec2 cell = vec2(floor(along / 3.4), floor((vWPos.y - vInfo.x) / 3.6));
+          vec2 f = vec2(fract(along / 3.4), fract((vWPos.y - vInfo.x) / 3.6));
+          float win = step(0.18, f.x) * step(f.x, 0.82) * step(0.28, f.y) * step(f.y, 0.78);
+          float seed = bhash(cell + floor(vWNormal.xz * 7.0) + vInfo.w);
+          float lit = step(0.62, seed) * (0.55 + 0.45 * bhash(cell * 1.7 + 0.3));   // ~40 % of the windows, varied brightness
+          vec3 tone = mix(vec3(1.0, 0.84, 0.6), vec3(0.85, 0.92, 1.0), step(0.9, seed));
+          float terminal = step(0.5, vInfo.z) * step(vInfo.z, 1.5);
+          float hgt = max(vInfo.y, 1.0); float t = clamp((vWPos.y - vInfo.x) / hgt, 0.0, 1.0);
+          // a terminal's concourse is lit along its whole length behind the glass
+          float tGlass = step(0.16, t) * step(t, 0.86) * step(0.035, fract(along / 4.5)) * (1.0 - 0.6 * step(0.47, t) * step(t, 0.52));
+          float bayLit = 0.55 + 0.45 * bhash(vec2(floor(along / 18.0), vInfo.w));
+          totalEmissiveRadiance += mix(tone * win * lit * 0.85, vec3(0.62, 0.50, 0.34) * tGlass * bayLit * 0.2, terminal) * wall * uNight;
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'buildings-facade';
+  const mesh = new THREE.Mesh(merged, mat); mesh.name = 'buildings';
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(merged, 25), new THREE.LineBasicMaterial({ color: 0x0b0b0c, transparent: true, opacity: 0.35 }));
+  mesh.add(edges);
+  // Sun shadows: the same geometry projected onto the ground along the sun direction in the vertex shader (walls become
+  // the skewed sides of the shadow, the roof its far end). depthFunc Less keeps overlapping faces from darkening twice.
+  const shadowUniforms = { uSun: { value: new THREE.Vector3(-0.5, 0.6, 0.5) }, uOpacity: { value: 0.3 }, uLift: { value: 0.66 } };
+  const shadowMat = new THREE.ShaderMaterial({
+    uniforms: shadowUniforms, transparent: true, depthWrite: true, depthFunc: THREE.LessDepth,
+    vertexShader: `attribute vec4 aInfo; uniform vec3 uSun; uniform float uLift;
+      void main() { float hgt = max(0.0, position.y - aInfo.x); vec3 p = position; p.xz -= uSun.xz / max(uSun.y, 0.25) * hgt; p.y = aInfo.x + uLift;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0); }`,
+    fragmentShader: `uniform float uOpacity; void main() { gl_FragColor = vec4(0.02, 0.02, 0.035, uOpacity); }`,
+  });
+  const shadows = new THREE.Mesh(merged, shadowMat); shadows.name = 'building-shadows'; shadows.frustumCulled = false; shadows.renderOrder = 4;
+  const setSun = (dir: THREE.Vector3, day: number, cloud: number) => { shadowUniforms.uSun.value.copy(dir); shadowUniforms.uOpacity.value = 0.32 * day * (1 - cloud * 0.7); shadows.visible = shadowUniforms.uOpacity.value > 0.02; };
+  return { mesh, material: mat, shadows, setSun };
+}
+
+function polyAreaM2(pts: { x: number; y: number }[]): number {
+  let a = 0; for (let i = 0; i < pts.length; i++) { const p = pts[i], q = pts[(i + 1) % pts.length]; a += p.x * q.y - q.x * p.y; } return Math.abs(a) / 2;
+}
+
+export function mergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  geos = geos.map(g => (g.index ? g.toNonIndexed() : g));   // indexed inputs (ribbons) must be expanded before concatenation
+  let count = 0; for (const g of geos) count += g.getAttribute('position').count;
+  const pos = new Float32Array(count * 3), nor = new Float32Array(count * 3), uv = new Float32Array(count * 2);
+  let o = 0; let hasUv = true;
+  for (const g of geos) {
+    if (!g.getAttribute('normal')) g.computeVertexNormals();
+    const p = g.getAttribute('position').array as Float32Array; const n = g.getAttribute('normal').array as Float32Array;
+    const u = g.getAttribute('uv'); if (u) uv.set(u.array as Float32Array, (o / 3) * 2); else hasUv = false;
+    pos.set(p, o); nor.set(n, o); o += p.length; g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3)); out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  if (hasUv) out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return out;
+}
+
+// ── procedural pavement textures (canvas, tiled in world space) ──────────────
+/** Value noise helper for the pavement canvases. */
+function noiseCanvas(size: number, draw: (u: number, v: number, n: (f: number) => number, rnd: () => number) => number): THREE.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const ctx = c.getContext('2d')!; const img = ctx.createImageData(size, size);
+  let seed = 1234; const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const lat = new Map<number, Float32Array>();
+  const noise = (u: number, v: number, f: number) => {
+    let g = lat.get(f); if (!g) { g = new Float32Array(f * f); for (let i = 0; i < g.length; i++) g[i] = rnd(); lat.set(f, g); }
+    const fx = u * f, fy = v * f; const ix = Math.floor(fx), iy = Math.floor(fy); let tx = fx - ix, ty = fy - iy; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const at = (i: number, j: number) => g![((j % f) + f) % f * f + ((i % f) + f) % f];
+    return (at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx) * (1 - ty) + (at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+  };
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const u = x / size, v = y / size; const val = Math.max(0, Math.min(255, draw(u, v, (f) => noise(u, v, f), rnd)));
+    img.data[(y * size + x) * 4] = img.data[(y * size + x) * 4 + 1] = img.data[(y * size + x) * 4 + 2] = val; img.data[(y * size + x) * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8; t.colorSpace = THREE.NoColorSpace;
+  return t;
+}
+/** Apron concrete: 60 m tile of 7.5 m slabs - joints, a different tone per slab, stains and fine grain. */
+let concreteTex: THREE.CanvasTexture | null = null;
+function concreteTexture(): THREE.CanvasTexture {
+  if (concreteTex) return concreteTex;
+  const N = 8;   // slabs per tile side
+  const tone: number[] = []; let s = 77; for (let i = 0; i < N * N; i++) { s = (s * 1664525 + 1013904223) >>> 0; tone.push(s / 4294967296); }
+  const t = noiseCanvas(512, (u, v, n, rnd) => {
+    const su = u * N, sv = v * N; const fu = su - Math.floor(su), fv = sv - Math.floor(sv);
+    const joint = Math.min(fu, 1 - fu, fv, 1 - fv) < 0.022 ? 1 : 0;
+    const slab = tone[(Math.floor(sv) % N) * N + (Math.floor(su) % N)];
+    const stain = n(4) * 0.6 + n(9) * 0.4;
+    return 226 + (slab - 0.5) * 16 + (stain - 0.5) * 26 + (n(64) - 0.5) * 12 + (rnd() - 0.5) * 12 - joint * 24;
+  });
+  t.repeat.set(1 / 60, 1 / 60); concreteTex = t; return t;
+}
+/** Asphalt: fine aggregate grain with soft patching, no joints (40 m tile). */
+let asphaltTex: THREE.CanvasTexture | null = null;
+function asphaltTexture(): THREE.CanvasTexture {
+  if (asphaltTex) return asphaltTex;
+  const t = noiseCanvas(256, (_u, _v, n, rnd) => 214 + (n(5) - 0.5) * 34 + (n(24) - 0.5) * 16 + (rnd() - 0.5) * 30);
+  t.repeat.set(1 / 40, 1 / 40); asphaltTex = t; return t;
+}
+
+/** Runway designator as a canvas texture ("28L"), white on transparent, for the threshold number plates. */
+export function designatorTexture(text: string): THREE.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 128;
+  const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, 256, 128);
+  ctx.fillStyle = '#e8e8e4'; ctx.font = '700 104px "DM Sans", "Helvetica Neue", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 128, 66);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
+  return t;
+}
+
+/**
+ * Every designator (stand numbers, runway names) of a map in ONE texture, 256 x 128 px cells: the plates then share a
+ * material and merge into a single draw call instead of one mesh + one texture each (a big airport has 300 stands).
+ */
+export interface TextAtlas { texture: THREE.CanvasTexture; rect(text: string): [number, number, number, number] }
+export function textAtlas(texts: string[]): TextAtlas {
+  const unique = [...new Set(texts)]; const cols = 8, cw = 256, ch = 128;
+  const rows = Math.max(1, Math.ceil(unique.length / cols));
+  const c = document.createElement('canvas'); c.width = cols * cw; c.height = THREE.MathUtils.ceilPowerOfTwo(rows * ch);
+  const ctx = c.getContext('2d')!; ctx.clearRect(0, 0, c.width, c.height);
+  ctx.fillStyle = '#e8e8e4'; ctx.font = '700 104px "DM Sans", "Helvetica Neue", Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const cell = new Map<string, [number, number, number, number]>();
+  unique.forEach((t, i) => {
+    const x = (i % cols) * cw, y = Math.floor(i / cols) * ch;
+    ctx.fillText(t, x + cw / 2, y + ch / 2 + 2, cw - 16);
+    cell.set(t, [x / c.width, 1 - (y + ch) / c.height, (x + cw) / c.width, 1 - y / c.height]);   // u0, v0, u1, v1 (v up)
+  });
+  const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace; texture.anisotropy = 8;
+  return { texture, rect: (t) => cell.get(t) ?? [0, 0, 0, 0] };
+}
+/** A flat text plate (w x h m) at `pos`, glyph tops toward `heading` (deg, 0 = north), UVs from the atlas. */
+export function plateGeometry(atlas: TextAtlas, text: string, w: number, h: number, pos: THREE.Vector3, headingDeg: number): THREE.BufferGeometry {
+  const g = new THREE.PlaneGeometry(w, h); g.rotateX(-Math.PI / 2); g.rotateY(-headingDeg * Math.PI / 180); g.translate(pos.x, pos.y, pos.z);
+  const [u0, v0, u1, v1] = atlas.rect(text); const uv = g.getAttribute('uv') as THREE.BufferAttribute;
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, u0 + (u1 - u0) * uv.getX(i), v0 + (v1 - v0) * uv.getY(i));
+  return g;
+}
+
+/** Surfaces lifted by the apron floodlights at night (aprons), and the ones that stay dark (taxiways / runways). */
+const SURFACE_MATS: THREE.MeshLambertMaterial[] = [];
+const PAVEMENT_MATS: THREE.MeshLambertMaterial[] = [];
+const MARKING_MATS: THREE.MeshLambertMaterial[] = [];
+export function setSurfaceNight(n: number): void {
+  for (const m of SURFACE_MATS) m.emissive.setRGB(0.05 * n, 0.047 * n, 0.042 * n);
+  for (const m of PAVEMENT_MATS) m.emissive.setRGB(0.014 * n, 0.014 * n, 0.016 * n);
+  // paint is retro-reflective: it stays readable at night without glowing
+  for (const m of LINE_MATS) { const c = m.userData.base as THREE.Color; m.color.copy(c).multiplyScalar(0.85 - 0.35 * n); }
+  for (const m of MARKING_MATS) { const c = m.userData.base as THREE.Color; m.emissive.setRGB(c.r * 0.2 * n, c.g * 0.2 * n, c.b * 0.2 * n); }
+}
+const LINE_MATS: THREE.LineBasicMaterial[] = [];
+/** A hairline along painted stripes: from far away a 0.5 m stripe is thinner than a pixel and would break into dashes;
+ *  the line keeps it continuous (close up the stripe's own geometry covers it). Positions are segment pairs. */
+export function markingLines(positions: number[], color: THREE.Color): THREE.LineSegments {
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  const mat = new THREE.LineBasicMaterial({ color: color.clone(), depthWrite: false, transparent: true, opacity: 0.9 }); mat.userData.base = color.clone(); LINE_MATS.push(mat);
+  const l = new THREE.LineSegments(geo, mat); l.renderOrder = 5; l.frustumCulled = false; return l;
+}
+/** Apron concrete (slabs, joints, stains). */
+export function apronMaterial(): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color: PALETTE.concrete, side: THREE.DoubleSide, map: concreteTexture() }); SURFACE_MATS.push(m); return m; }
+/** Runway / taxiway asphalt. */
+export function asphaltMaterial(color: THREE.Color): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, map: asphaltTexture() }); PAVEMENT_MATS.push(m); return m; }
+/** Paint: lit by the sun like the pavement it is on (not self-lit), a little retro-reflection at night. */
+export function markingMaterial(color: THREE.Color): THREE.MeshLambertMaterial {
+  // Paint lies ON the pavement: drawn after it (renderOrder), never written to depth and pulled toward the camera, so
+  // layers of paint stack in draw order without fighting the surface or each other at any distance.
+  const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -60 });
+  m.userData.base = color.clone(); MARKING_MATS.push(m); return m;
+}
+
+export const TAXIWAY_WIDTH = 23;
+
+export function ribbon(a: THREE.Vector3, b: THREE.Vector3, width: number): THREE.BufferGeometry {
+  const dir = new THREE.Vector3().subVectors(b, a); dir.y = 0; dir.normalize();
+  const side = new THREE.Vector3(-dir.z, 0, dir.x).multiplyScalar(width / 2);
+  const p = [a.clone().add(side), a.clone().sub(side), b.clone().sub(side), b.clone().add(side)];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(p.flatMap(v => [v.x, v.y, v.z]), 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(p.flatMap(v => [v.x, v.z]), 2));   // world-planar UVs (the grain texture repeats every 24 m)
+  geo.setIndex([0, 1, 2, 0, 2, 3]); geo.computeVertexNormals();
+  return geo;
+}
+export interface NightHandle { setNight(n: number): void }
+
+export function glowTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64); g.addColorStop(0, 'rgba(255,214,150,0.55)'); g.addColorStop(0.35, 'rgba(255,190,110,0.18)'); g.addColorStop(1, 'rgba(255,170,90,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}

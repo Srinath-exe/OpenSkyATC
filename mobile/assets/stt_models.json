@@ -1,0 +1,218 @@
+{
+ "schema": 1,
+ "active": "parakeet-110m-atc-v1",
+ "models": [
+  {
+   "id": "zipformer-en-2023-06-26-int8",
+   "name": "Streaming Zipformer (English, LibriSpeech 960 h), int8",
+   "version": "2023.06.26-chunk16-left128",
+   "kind": "transducer",
+   "license": "Apache-2.0",
+   "source": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26",
+   "sampleRate": 16000,
+   "hotwords": true,
+   "notes": "icefall zipformer2 streaming transducer, ~66M params, 320 ms chunks; bpe.model is converted on device to bpe.vocab for hotwords",
+   "files": [
+    {
+     "role": "encoder",
+     "name": "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24/encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "sha256": "563fde436d16cf7607cf408cd6b30909819d03162652ef389c2450ced3f45ac1",
+     "size": 71083163
+    },
+    {
+     "role": "decoder",
+     "name": "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24/decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "sha256": "98da299f471e38bb4e1a8df579b8cc9122d6039576a77e357b3c60f17dd83b02",
+     "size": 1307236
+    },
+    {
+     "role": "joiner",
+     "name": "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24/joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx",
+     "sha256": "d944208d660d67c8d72cd2acaeac971fa5ceb8c80e76c1968148846fedd6e297",
+     "size": 259335
+    },
+    {
+     "role": "tokens",
+     "name": "tokens.txt",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24/tokens.txt",
+     "sha256": "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb",
+     "size": 5048
+    },
+    {
+     "role": "bpe_model",
+     "name": "bpe.model",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/672fbf1b30579d6585301139bb363f42a0ad4a24/bpe.model",
+     "sha256": "c53433de083c4a6ad12d034550ef22de68cec62c4f58932a7b6b8b2f1e743fa5",
+     "size": 244865
+    }
+   ]
+  },
+  {
+   "id": "zipformer-en-20M-2023-02-17-int8",
+   "name": "Streaming Zipformer 20M (English), int8",
+   "version": "2023.02.17",
+   "kind": "transducer",
+   "license": "Apache-2.0",
+   "source": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17",
+   "sampleRate": 16000,
+   "hotwords": false,
+   "notes": "smallest English streaming transducer; the repo has no bpe.model, so no hotwords",
+   "files": [
+    {
+     "role": "encoder",
+     "name": "encoder-epoch-99-avg-1.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/encoder-epoch-99-avg-1.int8.onnx",
+     "sha256": "3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3",
+     "size": 42845182
+    },
+    {
+     "role": "decoder",
+     "name": "decoder-epoch-99-avg-1.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/decoder-epoch-99-avg-1.int8.onnx",
+     "sha256": "21e2a2acd961b3ac72f55be2f10f1a285e1b0b0ba010d7c0b6eab141411b163c",
+     "size": 539499
+    },
+    {
+     "role": "joiner",
+     "name": "joiner-epoch-99-avg-1.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/joiner-epoch-99-avg-1.int8.onnx",
+     "sha256": "e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e",
+     "size": 259572
+    },
+    {
+     "role": "tokens",
+     "name": "tokens.txt",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16/tokens.txt",
+     "sha256": "49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb",
+     "size": 5048
+    }
+   ]
+  },
+  {
+   "id": "nemo-fastconformer-en-80ms-int8",
+   "name": "NeMo FastConformer streaming transducer (English, 80 ms), int8",
+   "version": "2024.1",
+   "kind": "transducer",
+   "license": "CC-BY-4.0",
+   "source": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms-int8",
+   "sampleRate": 16000,
+   "hotwords": false,
+   "notes": "NVIDIA FastConformer (~114M params) trained on ~10k h of diverse English; 137 MB",
+   "files": [
+    {
+     "role": "encoder",
+     "name": "encoder.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms-int8/resolve/3fafd319033af1c552e7bc8394f7258afdce91b0/encoder.int8.onnx",
+     "sha256": "8b982c67b45e3b735d3fee49a4fea525b3149b450ba437f4c8a933f4aa6744c0",
+     "size": 131507579
+    },
+    {
+     "role": "decoder",
+     "name": "decoder.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms-int8/resolve/3fafd319033af1c552e7bc8394f7258afdce91b0/decoder.int8.onnx",
+     "sha256": "76eec598da07c204747a859a723b99077ef0bbdc19ef4b3f51eb43275662475d",
+     "size": 3955863
+    },
+    {
+     "role": "joiner",
+     "name": "joiner.int8.onnx",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms-int8/resolve/3fafd319033af1c552e7bc8394f7258afdce91b0/joiner.int8.onnx",
+     "sha256": "67f4291dc170fd06b3695a8511f5199fd5965ee3c77cfbd59afc10e145f173f2",
+     "size": 1408182
+    },
+    {
+     "role": "tokens",
+     "name": "tokens.txt",
+     "url": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-streaming-fast-conformer-transducer-en-80ms-int8/resolve/3fafd319033af1c552e7bc8394f7258afdce91b0/tokens.txt",
+     "sha256": "618dc110fc2213886b52e063ff42329bbdf37a266ca7705184090fa5f39f3131",
+     "size": 11896
+    }
+   ]
+  },
+  {
+   "id": "parakeet-110m-atc-dry",
+   "name": "Parakeet TDT 110M (dry run, not fine-tuned yet)",
+   "version": "dry",
+   "kind": "nemoTransducer",
+   "license": "CC-BY-4.0",
+   "source": "ml/stt/train_parakeet.py",
+   "sampleRate": 16000,
+   "hotwords": false,
+   "notes": "offline NeMo transducer, greedy; files hosted at openatc.aeon-labs.site/models/stt/parakeet-110m-atc-dry",
+   "files": [
+    {
+     "role": "encoder",
+     "name": "encoder.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-dry/encoder.int8.onnx",
+     "sha256": "fad0b790961b681e1adbaf40aaaaa49965c3b0eb908207896bd9f026bfcab129",
+     "size": 131112997
+    },
+    {
+     "role": "decoder",
+     "name": "decoder.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-dry/decoder.int8.onnx",
+     "sha256": "2c513b251f68dbb4fa13f62953fd4991975006915c800176ca43bd08854c5070",
+     "size": 3955863
+    },
+    {
+     "role": "joiner",
+     "name": "joiner.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-dry/joiner.int8.onnx",
+     "sha256": "35a99ed36c5f9c796010c36ce7fdaef3bc1e4455e83c5be86d292808ecee479d",
+     "size": 1411400
+    },
+    {
+     "role": "tokens",
+     "name": "tokens.txt",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-dry/tokens.txt",
+     "sha256": "450e56bd2f036fe5b6aa821865838cc5aa9d8b0106134ce9a9ba0664abe6cd10",
+     "size": 9953
+    }
+   ]
+  },
+  {
+   "id": "parakeet-110m-atc-v1",
+   "name": "Parakeet TDT 110M, fine-tuned for ATC",
+   "version": "2026-11-11",
+   "kind": "nemoTransducer",
+   "license": "CC-BY-NC-SA-4.0 (training data includes UWB-ATCC and ATCOSIM)",
+   "source": "ml/stt/train_parakeet.py",
+   "sampleRate": 16000,
+   "hotwords": false,
+   "notes": "offline NeMo transducer, greedy; fine-tuned on 133 h of ATC speech (ml/gpu/remote/stt_edge.sh); owner recordings 0.6 % WER, coverage test 0.8 %; files hosted at openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1",
+   "files": [
+    {
+     "role": "encoder",
+     "name": "encoder.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1/encoder.int8.onnx",
+     "sha256": "8bb2341a4b42383f1d0ca9cb3f736da5cff6be35b71f1a2c37e365ea9a8329ab",
+     "size": 131112998
+    },
+    {
+     "role": "decoder",
+     "name": "decoder.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1/decoder.int8.onnx",
+     "sha256": "7b2efacf70318c51e0024a6a229a63d5b901ee6c8643794d158109122d10ae9e",
+     "size": 3955863
+    },
+    {
+     "role": "joiner",
+     "name": "joiner.int8.onnx",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1/joiner.int8.onnx",
+     "sha256": "fce43322868e78bbebb1db0ebbe6617e0dbdc907bcba4af357edf0a625ee12d6",
+     "size": 1411400
+    },
+    {
+     "role": "tokens",
+     "name": "tokens.txt",
+     "url": "https://openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1/tokens.txt",
+     "sha256": "450e56bd2f036fe5b6aa821865838cc5aa9d8b0106134ce9a9ba0664abe6cd10",
+     "size": 9953
+    }
+   ]
+  }
+ ]
+}

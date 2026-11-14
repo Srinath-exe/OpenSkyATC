@@ -1,0 +1,5 @@
+/* Settings page: header over the tabs (game/Settings/SettingsTabs.module.css lays out the rest across the width). */
+.page { display: flex; flex-direction: column; gap: var(--s-5); padding-bottom: var(--s-8, 48px); }
+.head { display: flex; flex-direction: column; gap: var(--s-2); }
+.title { color: var(--text-1); }
+.sub { color: var(--text-3); }
