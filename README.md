@@ -15,7 +15,7 @@ You are San Francisco's ground, tower or approach controller. Key the mic and ta
 
 > OpenATC was called SkyControl until recently, so the models and some code still carry that name.
 
-## One call, all the way round
+## How it works
 
 <picture>
   <source media="(max-width: 600px)" srcset=".github/readme/pipeline-phone.webp">
