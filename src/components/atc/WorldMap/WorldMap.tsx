@@ -813,6 +813,7 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         </div>
       </div>
       {status !== 'ready' ? <div className={styles.status} data-testid="world-status">{status === 'error' ? 'World data unavailable' : 'Building the world…'}</div> : null}
+      <p className={styles.credit}><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a> · Terrain: AWS Terrain Tiles</p>
       {standalone ? <div className={styles.hint}>drag · pan &nbsp; right-drag · orbit &nbsp; wheel · zoom &nbsp; Home · reset view</div> : null}
     </div>
   );

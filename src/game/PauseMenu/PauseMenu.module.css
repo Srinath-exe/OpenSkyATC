@@ -52,3 +52,5 @@
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #f2f4f7; border: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
 .range::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #f2f4f7; border: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
 .range:focus-visible { outline: none; } .range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255,138,60,0.6); } .range:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px rgba(255,138,60,0.6); }
+
+.legal { display: flex; justify-content: center; flex-wrap: wrap; gap: 2px 20px; padding: 10px 16px 16px; font: 500 12.5px/1 var(--font); } .legal a { padding: 8px 0; color: #9a9a9a; text-decoration: none; } .legal a:hover { color: #fff; text-decoration: underline; text-underline-offset: 3px; } .legal a:focus-visible { outline: 2px solid #ff8a3c; outline-offset: 2px; }

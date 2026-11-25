@@ -7,6 +7,10 @@
   The upstream base URL is LLM_BASE_URL (default: Ollama on this host), the key LLM_API_KEY, the default model LLM_MODEL.
   A request may name its own endpoint only when it points at this machine / the private LAN or a host listed in
   LLM_ALLOW_HOSTS (comma separated) — the proxy must not become an open relay.
+
+  Off on the public site: the game needs no language model, and an open proxy would let anyone use this machine's models
+  and reach its private addresses. LLM_PROXY=1 turns it on in production; there a request may only name a host in
+  LLM_ALLOW_HOSTS.
 */
 import { withRequestId } from '@/lib/requestId';
 import { NextResponse } from 'next/server';
@@ -14,6 +18,9 @@ import { NextResponse } from 'next/server';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const PROD = process.env.NODE_ENV === 'production';
+const OFF = PROD && process.env.LLM_PROXY !== '1';
+const off = () => NextResponse.json({ error: 'not found' }, { status: 404 });
 const DEFAULT_BASE = process.env.LLM_BASE_URL || 'http://127.0.0.1:11434/v1';
 
 function allowed(endpoint: string): boolean {
@@ -21,8 +28,8 @@ function allowed(endpoint: string): boolean {
   try { u = new URL(endpoint); } catch { return false; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
   const h = u.hostname.toLowerCase();
-  if (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === 'host.docker.internal') return true;
-  if (/^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  if (!PROD && (h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === 'host.docker.internal')) return true;
+  if (!PROD && /^10\.|^192\.168\.|^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
   const list = (process.env.LLM_ALLOW_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
   if (list.includes('*') || list.includes(h)) return true;
   try { return new URL(DEFAULT_BASE).hostname.toLowerCase() === h; } catch { return false; }
@@ -42,6 +49,7 @@ function upstreamHeaders(key: string | undefined): Record<string, string> {
 }
 
 async function handlePost(req: Request): Promise<Response> {
+  if (OFF) return off();
   let body: { model?: string; messages?: unknown; temperature?: number; max_tokens?: number; endpoint?: string; apiKey?: string; stream?: boolean };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 }); }
   if (!Array.isArray(body.messages) || !body.messages.length) return NextResponse.json({ error: 'messages[] required' }, { status: 400 });
@@ -63,6 +71,7 @@ async function handlePost(req: Request): Promise<Response> {
 }
 
 async function handleGet(req: Request): Promise<Response> {
+  if (OFF) return off();
   const url = new URL(req.url);
   const r = resolveBase(url.searchParams.get('endpoint') || undefined);
   if ('error' in r) return NextResponse.json({ error: r.error }, { status: 403 });

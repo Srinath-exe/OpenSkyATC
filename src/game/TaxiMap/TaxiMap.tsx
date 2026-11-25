@@ -200,6 +200,7 @@ export function TaxiMap() {
         <div ref={box} className={s.map}>
           <canvas ref={canvas} className={s.canvas} />
           <div className={s.zoom}><button type="button" aria-label="Zoom in" onClick={() => zoomBtn(1.35)}>+</button><button type="button" aria-label="Zoom out" onClick={() => zoomBtn(0.74)}>−</button><button type="button" aria-label="Whole airport" onClick={fit}>⤢</button></div>
+          <a className={s.credit} href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>
           {call ? <div className={s.call} data-testid="taxi-call"><small>You are saying</small>{call.line}</div> : null}
           <section className={s.panel} data-open={panel || undefined} aria-label="Display settings">
             <button type="button" className={s.fold} aria-expanded={panel} onClick={fold} data-testid="taxi-display"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M2 4.5h6M12 4.5h2M2 11.5h2M8 11.5h6" /><circle cx="10" cy="4.5" r="1.8" /><circle cx="6" cy="11.5" r="1.8" /></svg><b>Display</b><svg className={s.chev} viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" /></svg></button>

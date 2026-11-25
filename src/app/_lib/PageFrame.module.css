@@ -55,3 +55,4 @@
   .crumb { display: none; }
   .inner { padding-top: var(--s-5); }
 }
+.foot { max-width: 1320px; margin: 0 auto; padding: 18px var(--gutter) 34px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 20px; border-top: var(--bw) solid var(--line); font: 400 12.5px/1.4 var(--font); color: var(--text-3); }

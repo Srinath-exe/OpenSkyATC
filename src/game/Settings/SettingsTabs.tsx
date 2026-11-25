@@ -22,6 +22,8 @@ import type { VoiceEngine } from '@/lib/voice/recognizer'
 import { EV_REPLAY_TIPS } from '../HelpOverlay/OnboardingTips'
 import { PRESETS, setGraphicsPref, useDetected, useGraphicsPref } from '@/components/atc/WorldMap/quality'
 import type { GraphicsPref } from '@/components/atc/WorldMap/quality'
+import { CREDIT_GROUPS } from '@/app/_lib/credits'
+import { REPO_URL } from '@/app/_lib/site'
 import { downloadModel, setPilotVoice, setVoiceEngine, useModels, useVoicePrefs } from '@/lib/models/manager'
 import { ModelsPanel } from './ModelsPanel'
 import { KeyBindings, KeyCapture } from './KeyBindings'
@@ -418,17 +420,6 @@ function Data() {
 }
 
 // ── about (page) ──
-const CREDITS: { title: string; subtitle: string; href?: string; icon: IconName }[] = [
-  { title: 'OpenStreetMap contributors', subtitle: 'Airport layouts, taxiways and stands · ODbL 1.0', href: 'https://www.openstreetmap.org/copyright', icon: 'map' },
-  { title: 'Esri World Imagery', subtitle: 'Satellite backdrops · Esri, Maxar, Earthstar Geographics', href: 'https://www.esri.com/en-us/legal/terms/data-attributions', icon: 'layers' },
-  { title: 'Endless ATC airport format', subtitle: 'Airspace, beacons, ILS and entry-point definitions', icon: 'radio-tower' },
-  { title: 'MapLibre GL JS', subtitle: 'Ground map renderer · BSD-3', href: 'https://maplibre.org', icon: 'map-pin' },
-  { title: 'FlightGear AI aircraft', subtitle: 'Aircraft models and airline liveries · GNU GPL v2 · authors and source in the notice', href: '/models/fleet/NOTICE.txt', icon: 'plane' },
-  { title: 'ATC-ASR 110M', subtitle: 'Our speech model, fine-tuned from NVIDIA Parakeet TDT 110M (CC-BY-4.0) · CC BY-NC-SA 4.0', icon: 'radio' },
-  { title: 'Moonshine, Parakeet, Paradee', subtitle: 'Speech models · MIT / CC-BY-4.0 / Apache-2.0', icon: 'radio' },
-  { title: 'DM Sans', subtitle: 'Colophon Foundry · SIL Open Font License', href: 'https://fonts.google.com/specimen/DM+Sans', icon: 'info' },
-  { title: 'Lucide', subtitle: 'Line icons · ISC', href: 'https://lucide.dev', icon: 'sparkles' },
-]
 export const VersionContext = React.createContext('')
 function About() {
   const version = React.useContext(VersionContext)
@@ -440,10 +431,15 @@ function About() {
       <Group title="Something wrong?">
         <ListRow flush icon={<Icon name="circle-alert" size={18} />} title="Report a problem" subtitle="Tell us what went wrong; the last radio calls and what the speech engine heard go with it" onClick={openReport} testId="set-report" />
       </Group>
+      <Group title="Legal and help">
+        {([['Privacy', 'What is stored, what is sent, what is not', '/privacy'], ['Terms', 'A game, free, not for real-world aviation', '/terms'], ['Contact', 'Questions, ideas, your data', '/contact'], ['About and questions', 'How it works, who makes it', '/about'], ['Source on GitHub', 'The code and the Android app', REPO_URL]] as const).map(([t, sub, href]) => (
+          <ListRow key={href} flush icon={<Icon name="info" size={18} />} title={t} subtitle={sub} trailing={<Icon name="external-link" size={16} />} onClick={() => window.open(href, '_blank', 'noopener')} testId={href.startsWith('/') ? `set-link${href.replace('/', '-')}` : 'set-link-github'} />
+        ))}
+      </Group>
       <Group title="Credits" span>
         <div className={s.credits}>
-          {CREDITS.map((c) => (
-            <ListRow key={c.title} flush icon={<Icon name={c.icon} size={18} />} title={c.title} subtitle={c.subtitle} trailing={c.href ? <Icon name="external-link" size={16} /> : undefined}
+          {CREDIT_GROUPS.flatMap((g) => g.items).map((c) => (
+            <ListRow key={c.title} flush icon={<Icon name="info" size={18} />} title={c.title} subtitle={`${c.what} · ${c.licence}`} trailing={c.href ? <Icon name="external-link" size={16} /> : undefined}
               onClick={c.href ? () => window.open(c.href, '_blank', 'noopener,noreferrer') : undefined} testId={`set-credit-${c.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`} />
           ))}
         </div>

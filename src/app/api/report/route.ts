@@ -29,6 +29,7 @@ async function handlePost(req: Request) {
   let body: Record<string, unknown>;
   try { body = JSON.parse(text); } catch { return json({ error: 'bad json' }, 400); }
   if (!body || typeof body !== 'object' || (body.kind !== 'error' && body.kind !== 'report')) return json({ error: 'bad kind' }, 400);
+  if (body.website) return json({ ok: true, id: null });                 // the contact form's field people do not see: a bot filled it in
   const now = new Date();
   const id = `${body.kind === 'report' ? 'r' : 'e'}-${now.getTime().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
   const line = JSON.stringify({ id, at: now.toISOString(), country: req.headers.get('cf-ipcountry') ?? undefined, ...body }) + '\n';

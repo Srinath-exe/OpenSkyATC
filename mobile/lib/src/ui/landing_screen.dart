@@ -44,13 +44,14 @@ String _ft(num n) {
 }
 
 class LandingScreen extends StatefulWidget {
-  const LandingScreen({super.key, required this.config, required this.speechInstalled, required this.speechLabel, required this.onStart, required this.onSpeechModel, required this.onLearn, this.startFrame = 0});
+  const LandingScreen({super.key, required this.config, required this.speechInstalled, required this.speechLabel, required this.onStart, required this.onSpeechModel, required this.onLearn, this.onAbout, this.startFrame = 0});
   final ShiftConfig config;
   final bool speechInstalled;
   final String speechLabel;
   final void Function(ShiftConfig) onStart;
   final VoidCallback onSpeechModel;
   final VoidCallback onLearn;
+  final VoidCallback? onAbout;
 
   /// Story frame to open on (tests render chapters with it).
   final int startFrame;
@@ -540,7 +541,7 @@ class _LandingScreenState extends State<LandingScreen> with SingleTickerProvider
           h2('Work one seat. Hand the AI the other.'),
           body('Tower runs the ground and the runways, Approach runs the sky. Either can be you or the AI, and you can swap mid-session.'),
           Row(children: [_seat('Tower', fr < 418), const SizedBox(width: 8), _seat('Approach', fr >= 428 && fr < 436)]),
-          Text('24 full-traffic test sessions at JFK with the AI on both seats: zero losses of separation.', style: _mono.copyWith(fontSize: 10.5, color: _ink3)),
+          Text('Tested over 4,500 whole shifts before launch: more than 22,000 landings.', style: _mono.copyWith(fontSize: 10.5, color: _ink3)),
         ]);
     art(452, 462, 600, 601, (_) => [
           eyebrow('Free · on your phone · works offline'),
@@ -566,6 +567,7 @@ class _LandingScreenState extends State<LandingScreen> with SingleTickerProvider
           Wrap(spacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
             TextButton(onPressed: () => widget.onStart(_cfg.copyWith(icao: _icao)), child: const Text('Jump in at $_iata')),
             TextButton(onPressed: widget.onSpeechModel, child: Text(widget.speechInstalled ? 'Speech model ✓' : 'Download the speech model')),
+            TextButton(onPressed: widget.onAbout, child: const Text('About, privacy, credits')),
             Text('keep swiping and it loops', style: _mono.copyWith(fontSize: 10.5, color: _ink3)),
           ]),
         ]);

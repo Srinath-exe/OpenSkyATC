@@ -11,7 +11,16 @@
   <a href="https://huggingface.co/srinath-exe"><img src=".github/readme/pill-models.webp" height="42" alt="Get the models"></a>
 </p>
 
-You are San Francisco's ground, tower or approach controller. Key the mic and talk; the pilots read it back and fly what you said. Everything that listens, understands or speaks runs on small models, on a CPU server, in the browser or in the phone app. **No large language model and no GPU at run time.**
+<p align="center">
+  <a href="https://github.com/Srinath-exe/OpenSkyATC/releases/latest"><b>Android app (APK)</b></a> ·
+  <a href="https://srinath.aeon-labs.site">Portfolio</a> ·
+  <a href="https://huggingface.co/srinath-exe">Hugging Face</a> ·
+  <a href="https://x.com/srinath_exe">X</a> ·
+  <a href="https://www.linkedin.com/in/srinath-exe">LinkedIn</a> ·
+  <a href="mailto:1406srinath@gmail.com">Email</a>
+</p>
+
+You are the ground, tower or approach controller at San Francisco, New York JFK, Paris, Dubai, Singapore or Tokyo. Key the mic and talk; the pilots read it back and fly what you said. Everything that listens, understands or speaks runs on small models, on a CPU server, in the browser or in the phone app. **No large language model and no GPU at run time.**
 
 > OpenATC was called SkyControl until recently, so the models on Hugging Face and some internal names still carry the old one.
 
@@ -70,6 +79,10 @@ Typing commands always works. Voice input needs the speech server in `src/app/ap
 
 This repository is a snapshot from 25 November 2026, the same code as the live game that day. The numbers above describe the System One on Hugging Face.
 
+## Android app
+
+Download `OpenATC-android.apk` from the [newest release](https://github.com/Srinath-exe/OpenSkyATC/releases/latest) and allow your phone to install it (Android 7 or newer, 64-bit). It is not in an app store. To build it yourself see [`mobile/`](mobile/); you need your own Mapbox token. There is no iPhone build: it needs a Mac and Apple's signing, and is untested.
+
 ## Where things are
 
 | path | what |
@@ -85,6 +98,6 @@ This repository is a snapshot from 25 November 2026, the same code as the live g
 
 ## Licence
 
-Code: MIT. Media, models and data have their own terms: see [NOTICE.md](NOTICE.md).
+Code: MIT. The command model is Apache-2.0, the speech model CC BY-NC-SA 4.0 (non-commercial, from its training data), the aircraft models GNU GPL v2. Media and data have their own terms: see [NOTICE.md](NOTICE.md).
 
-Built by [Srinath H](https://github.com/Srinath-exe). The other one: [Stratify MCP](https://github.com/Srinath-exe/stratify-mcp).
+Built by [Srinath H](https://srinath.aeon-labs.site). The other one: [Stratify MCP](https://github.com/Srinath-exe/stratify-mcp).

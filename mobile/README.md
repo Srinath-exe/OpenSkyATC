@@ -94,13 +94,13 @@ LIBQUICKJSC_TEST_PATH=/opt/pub-cache/hosted/pub.dev/flutter_js-0.8.7/linux/share
 ## Build
 
 ```bash
-flutter build apk --release --target-platform android-arm64 --dart-define=APP_VERSION=2.0.0 \
+flutter build apk --release --target-platform android-arm64 --dart-define=APP_VERSION=2.1.0 \
   --dart-define=MAPBOX_TOKEN=$(grep ^NEXT_PUBLIC_MAPBOX_TOKEN= ../.env.local | cut -d= -f2-)
 (cd android && ./gradlew --stop)   # free the Gradle daemon's RAM on the shared host
 ```
 
 - **Mapbox token.** `MAPBOX_TOKEN` is required: without it the map stays blank. The web's public token works without a referrer. Mobile maps are billed per monthly active user (25,000 a month are free).
-- **Signing.** Release builds are signed with this host's debug key (`/root/.android/debug.keystore`), so the APK side-loads. A store release needs a real upload key.
+- **Signing.** Release builds use the key named in `android/key.properties` (git-ignored: `storeFile`, `storePassword`, `keyAlias`, `keyPassword`), or the debug key when that file is missing. Keep the key safe: an update must be signed with the same one.
 - **ABIs.** Only `arm64-v8a` is packaged; `-Pall-abis=true` keeps every ABI, e.g. for an x86_64 emulator.
 - **Gradle fixes for plugins:**
   - `android/build.gradle.kts` applies Kotlin to `mapbox_maps_flutter`, which skips it on AGP 9, and adds JitPack, where flutter_js's QuickJS comes from.

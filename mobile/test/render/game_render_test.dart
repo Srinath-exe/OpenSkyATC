@@ -33,7 +33,10 @@ void main() {
     }
     SharedPreferences.setMockInitialValues({});
     final old = FlutterError.onError;
-    FlutterError.onError = (d) => errors.add(d.exceptionAsString().split('\n').first);
+    FlutterError.onError = (d) {
+      errors.add(d.exceptionAsString().split('\n').first);
+      if (!d.exceptionAsString().contains('overflowed')) old?.call(d);   // shown as itself, not as this override
+    };
     await t.runAsync(() async {
       await _font('Roboto', ['$m/Roboto-Regular.ttf', '$m/Roboto-Bold.ttf', '$m/Roboto-Medium.ttf', '$m/Roboto-Black.ttf']);
       await _font('monospace', ['/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf']);
@@ -69,9 +72,9 @@ void main() {
     await t.pumpWidget(RepaintBoundary(key: key, child: MaterialApp(theme: theme, debugShowCheckedModeBanner: false, home: GameScreen(game: g, fleet: fleet, onLeave: () {}, onSpeechModel: () {}, mapOverride: map))));
     await t.runAsync(() async => g.debugAdvance(150));
     await shot('g1-board');
-    // tap the first departure on the board
-    final dep = g.ui!.departures.isNotEmpty ? g.ui!.departures.first : g.ui!.arrivals.first;
-    await t.tap(find.text(dep.callsign).first);
+    // tap the first departure in view on the board, else the first arrival (the strip scrolls sideways, most urgent first)
+    final dep = [...g.ui!.departures, ...g.ui!.arrivals].firstWhere((r) => find.text(r.callsign).hitTestable().evaluate().isNotEmpty);
+    await t.tap(find.text(dep.callsign).hitTestable().first);
     await t.runAsync(() async => g.debugAdvance(1));
     await shot('g2-card');
     // send the suggested call
@@ -126,7 +129,13 @@ void main() {
     final v = g.airportVersion, refs = ((g.airport!['stands'] as Map)['features'] as List).length;
     g.setNaming('simple');
     await t.runAsync(() async => g.debugAdvance(1));
-    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 1200)));
+    // (the new names come from the core's isolate: a busy machine takes its time, a lost message never comes)
+    final named = Stopwatch()..start();
+    while (g.airportVersion <= v && named.elapsedMilliseconds < 20000) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    }
+    // ignore: avoid_print
+    print('names switched after ${named.elapsedMilliseconds} ms');
     expect(g.airportVersion, greaterThan(v));
     expect(((g.airport!['stands'] as Map)['features'] as List).length, refs);
     g.setNaming('auto');
@@ -140,6 +149,15 @@ void main() {
     await t.tap(find.text('Approach').first);
     await t.runAsync(() async => g.debugAdvance(240));
     await shot('g6-approach');
+    // a long score beside a raised speed still fits the top bar
+    g.setRate(4);
+    for (var i = 0; i < 12 && (g.ui!.score?.points ?? 0) > -1000; i++) {
+      await t.runAsync(() async => g.debugAdvance(60));
+      await t.pump();
+    }
+    await shot('g7-score');
+    // ignore: avoid_print
+    print('score ${g.ui!.score?.points} x${g.ui!.rate}');
     g.dispose();
 
     FlutterError.onError = old;
@@ -156,7 +174,10 @@ void main() {
     }
     SharedPreferences.setMockInitialValues({});
     final old = FlutterError.onError;
-    FlutterError.onError = (d) => errors.add(d.exceptionAsString().split('\n').first);
+    FlutterError.onError = (d) {
+      errors.add(d.exceptionAsString().split('\n').first);
+      if (!d.exceptionAsString().contains('overflowed')) old?.call(d);   // shown as itself, not as this override
+    };
     await t.runAsync(() async {
       await _font('Roboto', ['$m/Roboto-Regular.ttf', '$m/Roboto-Bold.ttf', '$m/Roboto-Medium.ttf', '$m/Roboto-Black.ttf']);
       await _font('monospace', ['/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf']);

@@ -54,6 +54,10 @@
 @keyframes blink { 50% { opacity: 0.35; } }
 .navIdx { color: var(--ink-2); }
 .navName { color: var(--ink); min-width: 92px; }
+.navEnd { display: inline-flex; align-items: center; gap: 8px; }
+.navGit { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-radius: 999px; color: var(--ink); font-weight: 600; font-size: 13px; text-decoration: none; transition: background 160ms ease; }
+.navGit:hover { background: rgba(255, 255, 255, 0.12); }
+.navGit:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 .navCta {
   padding: 9px 16px;
   border-radius: 999px;
@@ -431,6 +435,16 @@
   .seatCard span { display: none; }
   .ctaMore { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; width: 100%; }
   .ctaMore .ctaLink { font-size: 13px; }
+  .ctaMore .ctaLink:nth-last-of-type(1) { grid-column: 1 / -1; }
   .ctaMore .ctaNote { grid-column: 1 / -1; margin-top: 2px; }
 }
 .wTwy[data-on='p'] { background: #6f6420; border-color: #6f6420; color: #1a1a1a; }
+
+.hero .ctaRow { justify-content: flex-start; }
+/* the legal links: in the corner all through the film, and at its end on phones (the corner has no room there) */
+.stage .legal { position: absolute; right: clamp(16px, 3vw, 36px); bottom: 40px; z-index: 6; }
+.outro .ctaMore .ctaNote { flex-basis: 100%; text-align: center; }
+.legalEnd { display: none; }
+.socialEnd { display: flex; justify-content: center; }
+@media (max-width: 1180px) { .stage .legal { display: none; } .legalEnd { display: flex; justify-content: center; } }
+@media (max-width: 640px) { .legalEnd { margin-top: -10px; } .socialEnd { margin: -8px 0; } .navGit { padding: 0 10px; } .navGit span { display: none; } }

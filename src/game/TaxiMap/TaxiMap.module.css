@@ -41,3 +41,5 @@
 .plane:focus-visible, .finRow:focus-visible, .finDep:focus-visible { outline: 2px solid #ff8a3c; outline-offset: 1px; }
 .none { margin: 12px; color: #8a94a0; font: 500 13px/1.4 var(--font); }
 @media (max-width: 760px) { .body { flex-direction: column; } .list { width: auto; max-height: 40vh; border-left: 0; border-top: 1px solid rgba(255,255,255,0.09); } }
+
+.credit { position: absolute; right: 64px; bottom: 8px; font: 500 11px/1 var(--font); color: #77828e; text-decoration: none; } .credit:hover { color: #b8c0ca; }

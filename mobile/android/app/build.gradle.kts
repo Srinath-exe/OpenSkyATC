@@ -1,8 +1,15 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// The release key lives outside the repository; android/key.properties (git-ignored) says where. Without it, a release
+// build is signed with the debug key: it installs, but not as an update of the published app.
+val keyFile = rootProject.file("key.properties")
+val keyProps = Properties().apply { if (keyFile.exists()) keyFile.inputStream().use { load(it) } }
 
 android {
     namespace = "site.aeonlabs.openatc"
@@ -33,10 +40,18 @@ android {
         }
     }
 
+    signingConfigs {
+        if (keyFile.exists()) create("release") {
+            storeFile = file(keyProps.getProperty("storeFile"))
+            storePassword = keyProps.getProperty("storePassword")
+            keyAlias = keyProps.getProperty("keyAlias")
+            keyPassword = keyProps.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
-            // Signed with the debug key so the APK installs by side-loading; a Play release needs a real upload key.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName(if (keyFile.exists()) "release" else "debug")
         }
     }
 }

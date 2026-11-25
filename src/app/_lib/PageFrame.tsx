@@ -3,6 +3,7 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { LogoMark, cx } from '@/design';
 import { applyPrefsToDocument } from './persist';
+import { LegalLinks } from './SiteFooter';
 import s from './PageFrame.module.css';
 
 export interface PageFrameProps {
@@ -36,6 +37,7 @@ export function PageFrame({ testId, crumb, right, width = 'wide', brandTestId = 
       </header>
       <div className={s.scroll}>
         <div className={cx(s.inner, width === 'full' ? s.full : width === 'wide' ? s.wide : s.narrow)}>{children}</div>
+        {width === 'full' ? null : <footer className={s.foot}><span>© 2026 OpenATC</span><LegalLinks /></footer>}
       </div>
     </div>
   );

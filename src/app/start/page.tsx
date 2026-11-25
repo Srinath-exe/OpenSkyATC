@@ -9,6 +9,7 @@ import type { WeightClass } from '@/lib/sim/aircraftDB';
 import type { RunwayEnd, RunwayPair } from '@/lib/runwayManifest';
 import { preferredEnds } from '@/lib/sim/weather';
 import { StateMirror } from '../_lib/PageFrame';
+import { LegalLinks } from '../_lib/SiteFooter';
 import {
   AIRPORTS, AIRPORT_BY_ICAO, LISTED_AIRPORTS, runwaysOf, sanitiseRef, windComponents, MAX_TAILWIND_KT, formatFeet, feetToMetres,
   type AirportMeta,
@@ -92,6 +93,7 @@ export default function HomePage() {
           <IconButton label="Settings" icon={<IconSettings />} size={40} variant="glass" onClick={() => router.push('/settings')} testId="home-settings-link" />
         </div>
       </header>
+      <footer className={s.foot}><span>Maps © <a href="https://www.mapbox.com/about/maps" target="_blank" rel="noopener noreferrer">Mapbox</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a></span><LegalLinks /></footer>
       {setup ? <Setup onDone={() => setSetup(false)} /> : null}
       {icao ? <Stage><Detail key={icao} airport={AIRPORT_BY_ICAO[icao]} onBack={single ? null : () => pickAirport(null)} /></Stage> : null}
     </div>

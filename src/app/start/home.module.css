@@ -175,3 +175,11 @@
 
 /* the back button stands over the airport's name */
 .boardHead h1:not(:first-child) { margin-top: 14px; }
+
+/* ---------- the foot of the page ---------- */
+.foot { position: absolute; left: clamp(16px, 3vw, 40px); right: clamp(16px, 3vw, 40px); bottom: 6px; z-index: 5; display: flex; justify-content: space-between; align-items: center; gap: 8px 20px; font: 500 12px/1 var(--font); color: var(--ink-3); pointer-events: none; }
+.foot a { color: var(--ink-3); pointer-events: auto; text-decoration: none; } .foot a:hover { color: var(--ink); }
+@media (max-width: 1099px) { .shell[data-mode="set"] .foot { position: static; padding: 0 clamp(16px, 3vw, 40px) 20px; flex-wrap: wrap; order: 9; } .shell[data-mode="set"] { display: flex; flex-direction: column; overflow: hidden auto; } .shell[data-mode="set"] .stage { flex: none; } }
+@media (max-width: 720px) { .shell[data-mode="pick"] .foot > span { display: none; } .shell[data-mode="pick"] .foot { justify-content: center; } }
+/* (these come after the rows they change: above them they never applied, and the seat cards ran off a phone's screen) */
+@media (max-width: 560px) { .row { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px 16px; } .rowLabel { padding-top: 0; } .boardHead { padding: 18px 16px 16px; } .boardTitle { font-size: 22px; } }

@@ -104,6 +104,7 @@ export function PauseMenu() {
                 </li>
               ))}
             </ul>
+            <nav className={styles.legal} aria-label="Legal">{[['Privacy', '/privacy'], ['Terms', '/terms'], ['Credits', '/credits'], ['Contact', '/contact']].map(([t, h]) => <a key={h} href={h} target="_blank" rel="noopener">{t}</a>)}</nav>
           </>
         )}
       </section>

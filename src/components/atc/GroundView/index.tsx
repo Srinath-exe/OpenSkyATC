@@ -628,6 +628,7 @@ export default function GroundView({ theme: themeProp }: GroundViewProps) {
       <div ref={mapDiv} className={styles.map} data-testid="ground-map" data-ready={readyRef.current ? 'true' : 'false'} />
       <canvas ref={canvasRef} className={styles.overlay} data-testid="ground-overlay" aria-hidden="true" />
       {theme === 'satellite' ? <div className={styles.veil} aria-hidden="true" /> : null}
+      <p className={styles.credit}><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a>{theme === 'satellite' ? ' · Imagery © Esri, Maxar, Earthstar Geographics' : ''}</p>
 
       <LiveTooltip ref={tooltipRef} tip={tip} position={position} />
 

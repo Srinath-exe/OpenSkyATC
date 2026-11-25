@@ -1,0 +1,5 @@
+Contact: mailto:1406srinath@gmail.com
+Contact: https://openatc.aeon-labs.site/contact?topic=security
+Expires: 2027-11-25T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://openatc.aeon-labs.site/.well-known/security.txt

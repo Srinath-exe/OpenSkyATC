@@ -42,7 +42,17 @@ const nextConfig = {
   // The baked worlds and the aircraft models are large and immutable per version (their URLs carry ?v=): cache them for
   // a year so a returning player downloads nothing but the page. Everything else keeps Next's revalidation defaults.
   async headers() {
+    const inner = ['/lab/:path*', '/design', '/map3d', '/reports/:path*', '/feedback/:path*', '/voice/record.html', '/taxi', '/play', '/atc', '/api/:path*', '/dl/:path*', '/downloads/:path*']
     return [
+      { source: '/:path*', headers: [
+        { key: 'X-Content-Type-Options', value: 'nosniff' },
+        { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
+        { key: 'Strict-Transport-Security', value: 'max-age=15552000' },
+        { key: 'Permissions-Policy', value: 'microphone=(self), display-capture=(self), camera=(), geolocation=(), payment=(), usb=()' },
+      ] },
+      // the team's own screens, and screens that are a running session: not for search engines
+      ...inner.map((source) => ({ source, headers: [{ key: 'X-Robots-Tag', value: 'noindex, nofollow' }] })),
       { source: '/world/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
       { source: '/models/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
       // the landing film's frames, video pieces and tracks (fetched with ?v=ASSET_V)

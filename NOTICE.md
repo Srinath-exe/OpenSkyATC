@@ -3,7 +3,7 @@
 **Code:** MIT (see `LICENSE`).
 
 **Media:** the landing film frames (`public/landing/`), the tutorial narration, clips and music (`public/learn/`) and the
-style previews (`public/looks/`) are © 2026 Srinath-exe, all rights reserved. They are here so the game runs as it does
+style previews (`public/looks/`) are © 2026 Srinath H, all rights reserved. They are here so the game runs as it does
 live; please don't reuse them elsewhere.
 
 **Models**
@@ -15,6 +15,9 @@ live; please don't reuse them elsewhere.
 | Paradee-8M pilot voices (`public/models/tts/`, by sahilmahendrakar) | Apache-2.0, see its `LICENSE` and `NOTICE` |
 | Moonshine (on-device speech option, loaded from its own host) | MIT |
 | Textured aircraft and airline liveries (`public/models/fleet/`), from FlightGear's AI aircraft, converted by `scripts/fleet/convert_fg.py` | GNU GPL v2, see `public/models/fleet/LICENSE` and `NOTICE.txt` (authors, source, changes) |
+
+The Android app attached to the releases holds the command model and the aircraft models above, under the same licences,
+and the Mapbox Maps SDK under Mapbox's own terms. The speech model is downloaded when you first use it.
 
 **Data**
 

@@ -23,12 +23,13 @@ import 'src/game/game_screen.dart';
 import 'src/models/downloader.dart';
 import 'src/models/manifest.dart';
 import 'src/models/updates.dart';
+import 'src/ui/about_screen.dart';
 import 'src/ui/landing_screen.dart';
 import 'src/ui/model_screen.dart';
 import 'src/ui/model_update_sheet.dart';
 import 'src/ui/theme.dart';
 
-const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: '2.0.0');
+const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: '2.1.0');
 const String kMapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
 
 Future<void> main() async {
@@ -198,6 +199,7 @@ class _FlowState extends State<_Flow> with WidgetsBindingObserver {
             config: _cfg,
             speechInstalled: _installed,
             speechLabel: _spec.name,
+            onAbout: () => showAbout(context, version: kAppVersion),
             onStart: _start,
             onLearn: () {
               Sfx.I.ui('start');
@@ -261,6 +263,7 @@ class _FlowState extends State<_Flow> with WidgetsBindingObserver {
               fleet: widget.fleet,
               onLeave: _leave,
               onSpeechModel: () => _speechModel(_Page.game),
+              version: kAppVersion,
             ),
           ),
       },

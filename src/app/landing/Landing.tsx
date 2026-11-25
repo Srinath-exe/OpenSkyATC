@@ -9,6 +9,9 @@ import Link from 'next/link';
 import s from './landing.module.css';
 import { RadarLoader } from './RadarLoader';
 import { LogoMark } from '@/design/LogoMark'
+import { LegalLinks } from '../_lib/SiteFooter'
+import { SocialIcon, SocialLinks } from '../_lib/SocialLinks'
+import { RELEASES_URL, REPO_URL } from '../_lib/site'
 
 const BASE = '/landing/sfo';
 /** A portrait screen (phones, tablets held upright) plays the 1080 x 1920 cut. */
@@ -565,7 +568,10 @@ export default function Landing() {
           <span data-el="chIdx" className={s.navIdx}>01 / 10</span>
           <span data-el="chName" className={s.navName}>Radar</span>
         </div>
-        <Link href="/start" className={s.navCta}>Play</Link>
+        <div className={s.navEnd}>
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className={s.navGit} aria-label="OpenATC on GitHub" title="OpenATC on GitHub" data-testid="landing-github"><SocialIcon name="github" size={20} /><span>GitHub</span></a>
+          <Link href="/start" className={s.navCta}>Play</Link>
+        </div>
       </header>
 
       <section data-film className={s.film}>
@@ -595,6 +601,7 @@ export default function Landing() {
             <span className={s.altVal}><b data-el="alt">86,940</b> FT</span>
             <span className={s.altCap}>CAMERA</span>
           </div>
+          <LegalLinks className={s.legal} />
           <div data-el="progress" className={s.progress} aria-hidden="true">
             {CHAPTERS.map((c) => <div key={c.key} className={s.seg}><i /><span>{c.name}</span></div>)}
           </div>
@@ -699,7 +706,7 @@ export default function Landing() {
                 <span className={s.seat} data-seat="tower"><b>Tower</b><span className={s.sw}><i>You</i><i>AI</i></span></span>
                 <span className={s.seat} data-seat="app"><b>Approach</b><span className={s.sw}><i>You</i><i>AI</i></span></span>
               </span>
-              {L(5, '24 full-traffic test sessions at JFK with the AI on both seats: zero losses of separation.', s.fine)}
+              {L(5, 'Tested over 4,500 whole shifts before launch: more than 22,000 landings.', s.fine)}
             </article>
 
             <article data-copy="452,462,600,601" className={`${s.copy} ${s.outro}`}>
@@ -718,9 +725,14 @@ export default function Landing() {
                 <Link href="/start" className={s.ctaLink}>Set up your own shift</Link>
                 <Link href="/settings" className={s.ctaLink}>Voice &amp; settings</Link>
                 <Link href="/hangar" className={s.ctaLink}>Browse the hangar</Link>
-                <a href="https://huggingface.co/srinath-exe/skycontrol-atc-command-2m" target="_blank" rel="noopener noreferrer" className={s.ctaLink}>Open model on Hugging Face</a>
+                <a href="https://huggingface.co/srinath-exe" target="_blank" rel="noopener noreferrer" className={s.ctaLink}>Models on Hugging Face</a>
+                <a href={RELEASES_URL} target="_blank" rel="noopener noreferrer" className={s.ctaLink}>Android app</a>
+                <Link href="/about" className={s.ctaLink}>About</Link>
+                <Link href="/airports" className={s.ctaLink}>Airports</Link>
                 <span className={s.ctaNote}>keep scrolling and it loops</span>
               </span>
+              <div className={`${s.line} ${s.socialEnd}`} style={{ ['--i' as string]: 6 }}><SocialLinks /></div>
+              <span className={`${s.line} ${s.legalEnd}`} style={{ ['--i' as string]: 6 }}><LegalLinks /></span>
             </article>
           </div>
 

@@ -18,14 +18,16 @@ import 'fleet.dart';
 import 'game_controller.dart';
 import 'layouts.dart';
 import 'radar_view.dart';
+import '../ui/about_screen.dart';
 import 'voice.dart';
 
 class GameScreen extends StatefulWidget {
-  const GameScreen({super.key, required this.game, required this.fleet, required this.onLeave, required this.onSpeechModel, this.mapOverride});
+  const GameScreen({super.key, required this.game, required this.fleet, required this.onLeave, required this.onSpeechModel, this.version = '', this.mapOverride});
   final GameController game;
   final Fleet fleet;
   final VoidCallback onLeave;
   final VoidCallback onSpeechModel;
+  final String version;
 
   /// Stands in for the Mapbox map (tests render the screen without a GPU map).
   final Widget? mapOverride;
@@ -221,6 +223,7 @@ class _GameScreenState extends State<GameScreen> {
           Navigator.pop(ctx);
           showRunways(context, g);
         },
+        onAbout: () => showAbout(context, version: widget.version),
       ),
     );
   }
@@ -542,11 +545,22 @@ class _TopBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _AiButton(on: ai, onTap: onAi),
-            const Spacer(),
-            Icon(Icons.star_rounded, size: 16, color: points < 0 ? AtcColors.bad : AtcColors.accent),
-            const SizedBox(width: 3),
-            Text(_compact(points), style: AtcType.data.copyWith(fontSize: 15, color: points < 0 ? AtcColors.bad : AtcColors.text)),
-            if ((ui?.rate ?? 1) > 1) Text(' ×${ui!.rate}', style: AtcType.data.copyWith(fontSize: 13, color: AtcColors.accent)),
+            const SizedBox(width: 4),
+            Expanded(
+              child: FittedBox(   // a long score gets smaller instead of running off the screen
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerRight,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.star_rounded, size: 16, color: points < 0 ? AtcColors.bad : AtcColors.accent),
+                    const SizedBox(width: 3),
+                    Text(_compact(points), style: AtcType.data.copyWith(fontSize: 15, color: points < 0 ? AtcColors.bad : AtcColors.text)),
+                    if ((ui?.rate ?? 1) > 1) Text(' ×${ui!.rate}', style: AtcType.data.copyWith(fontSize: 13, color: AtcColors.accent)),
+                  ],
+                ),
+              ),
+            ),
             IconButton(
               onPressed: onMenu,
               icon: const Icon(Icons.menu_rounded, color: AtcColors.text),
@@ -1807,9 +1821,9 @@ class _VolumesState extends State<_Volumes> {
 }
 
 class _Menu extends StatelessWidget {
-  const _Menu({required this.game, required this.onLeave, required this.onSpeechModel, required this.onLog, required this.onRunways});
+  const _Menu({required this.game, required this.onLeave, required this.onSpeechModel, required this.onLog, required this.onRunways, required this.onAbout});
   final GameController game;
-  final VoidCallback onLeave, onSpeechModel, onLog, onRunways;
+  final VoidCallback onLeave, onSpeechModel, onLog, onRunways, onAbout;
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -1893,6 +1907,15 @@ class _Menu extends StatelessWidget {
                   ],
                 ),
                 const SizedBox(height: 8),
+                row(
+                  Icons.info_outline_rounded,
+                  'About, privacy, credits',
+                  trailing: const Icon(Icons.chevron_right_rounded, color: AtcColors.muted),
+                  onTap: () {
+                    Navigator.pop(context);
+                    onAbout();
+                  },
+                ),
                 row(
                   Icons.add_road_rounded,
                   'Runways in use',
