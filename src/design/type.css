@@ -1,4 +1,4 @@
-/* SKYCONTROL type scale classes (01 section 2.2, A18). Sentence case throughout; caps only in .micro-caps. */
+/* OpenATC type scale classes (01 section 2.2, A18). Sentence case throughout; caps only in .micro-caps. */
 
 .display-xl { font: var(--fw-display-xl) var(--fs-display-xl) / var(--lh-display-xl) var(--font); letter-spacing: var(--ls-display-xl); }
 .display-l  { font: var(--fw-display-l) var(--fs-display-l) / var(--lh-display-l) var(--font); letter-spacing: var(--ls-display-l); }

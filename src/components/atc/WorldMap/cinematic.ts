@@ -1,33 +1,19 @@
 /*
-  The map's look, a player preference: 'standard' (the default grade) or 'cinematic' (a filmic finish: bloom on the sun
-  and the lights, a highlight roll-off, teal shadows and warm highlights, a gentle S-curve, lens fringing toward the
-  corners, a deeper vignette and fine moving grain). Applied live, no reload. Asked once on the first game
-  (LookPicker); changed any time in Settings > Graphics.
+  The map's look: 'cinematic' (a filmic finish: bloom on the sun and the lights, a highlight roll-off, teal shadows and
+  warm highlights, a gentle S-curve, lens fringing toward the corners, a deeper vignette and fine moving grain), always.
+  'standard' (the plain grade) is only reachable through the test hook.
 */
 import { useSyncExternalStore } from 'react';
 
 export type Look = 'standard' | 'cinematic';
-const KEY = 'skycontrol_world_look';
 const subs = new Set<() => void>();
-let cached: Look | null | undefined;
-function stored(): Look | null {
-  if (cached !== undefined) return cached;
-  let v: string | null = null;
-  try { v = typeof window === 'undefined' ? null : localStorage.getItem(KEY); } catch { v = null; }
-  cached = v === 'cinematic' || v === 'standard' ? v : null;
-  return cached;
-}
-export const getLook = (): Look => stored() ?? 'standard';
-/** Whether the player has picked a look (the first-run question is asked until they have). */
-export const lookChosen = (): boolean => stored() !== null;
-export function setLook(l: Look): void {
-  cached = l;
-  try { localStorage.setItem(KEY, l); } catch { /* private mode */ }
-  for (const f of subs) f();
-}
+// Always cinematic (2026-11-21: the Standard option and the first-run question are gone). setLook stays for the
+// page's test hook (__worldLook) and lasts for the session only.
+let cached: Look | null = null;
+export const getLook = (): Look => cached ?? 'cinematic';
+export function setLook(l: Look): void { cached = l; for (const f of subs) f(); }
 const subscribe = (f: () => void) => { subs.add(f); return () => { subs.delete(f); }; };
-export function useLook(): Look { return useSyncExternalStore(subscribe, getLook, () => 'standard' as Look); }
-export function useLookChosen(): boolean { return useSyncExternalStore(subscribe, lookChosen, () => true); }
+export function useLook(): Look { return useSyncExternalStore(subscribe, getLook, () => 'cinematic' as Look); }
 export const onLook = subscribe;
 
 /** The cinematic finish (linear light in and out; the bloom runs before it, on the HDR frame). */

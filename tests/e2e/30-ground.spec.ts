@@ -41,7 +41,10 @@ async function holdsOf(sim: SimApi, cs: string): Promise<HoldRow[]> {
 const dist = (a: XY, b: XY) => Math.hypot(a.x - b.x, a.y - b.y);
 const hdgDelta = (a: number, b: number) => Math.abs((((a - b) % 360) + 540) % 360 - 180);
 
-function spawnParked(sim: SimApi, cs: string, gate: string, runway: string): Promise<AircraftView> {
+async function spawnParked(sim: SimApi, cs: string, gate: string, runway: string): Promise<AircraftView> {
+  // the engine now gives a remote stand a pushback when its only way out is behind the parked nose (as CRP's is);
+  // the start-up-without-pushback flow is still tested at CRP, marked a drive-out stand for the test
+  if (gate === NOPUSH_STAND) await sim.page.evaluate((ref) => { const g = (window as unknown as { __atcSim: { engine: { gateByRef(r: string): { needsPushback: boolean } } } }).__atcSim.engine.gateByRef(ref); if (g) g.needsPushback = false }, gate)
   return sim.spawnAt({ callsign: cs, type: 'A320', kind: 'departure', phase: 'parked', gate, plan: { runway } });
 }
 /** Departure at the stand's entry node, engines running, NO taxi clearance yet (stage taxi_out, empty path). */
@@ -601,8 +604,10 @@ test.describe('GROUND position by clicks', () => {
     await game.pickTaxiwayRoute({ auto: true });
     await game.next();
     await expect(game.confirmSummary()).toContainText(/taxi to stand fife one one/i);
+    // another stand than the company's: the crew asks once ("company has us on stand 512, confirm 511"), saying it again confirms it
     const tx = await game.transmit();
-    expect(tx.code).toBe('ok_queued');
+    expect(tx.code).toBe('queried');
+    await game.sendOk(`${cs} taxi to stand 511`);
     await expect(game.stripReq(cs)).toHaveCount(0);
 
     await sim.advance(PILOT);

@@ -43,7 +43,7 @@ export class LocalProjection {
 // ── Pure (x, y) helpers — all in metres / compass degrees ──────────────────────
 
 export function dist(a: XY, b: XY): number {
-  return Math.hypot(b.x - a.x, b.y - a.y);
+  const dx = b.x - a.x, dy = b.y - a.y; return Math.sqrt(dx * dx + dy * dy);   // (Math.hypot is many times slower, and this runs the most of all)
 }
 
 export function dist2(a: XY, b: XY): number {
@@ -71,10 +71,10 @@ export function advance(p: XY, heading: number, metres: number): XY {
 export function distToSegment(p: XY, a: XY, b: XY): number {
   const dx = b.x - a.x, dy = b.y - a.y;
   const len2 = dx * dx + dy * dy;
-  if (len2 < 1e-9) return Math.hypot(p.x - a.x, p.y - a.y);
+  if (len2 < 1e-9) return dist(a, p);
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
   t = Math.max(0, Math.min(1, t));
-  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+  const ex = p.x - (a.x + dx * t), ey = p.y - (a.y + dy * t); return Math.sqrt(ex * ex + ey * ey);
 }
 
 // ── Polyline helpers for path-following ────────────────────────────────────────
@@ -143,6 +143,21 @@ export function chaikin(pts: XY[], iters = 2): XY[] {
  * a leg get half of it each. Bends of under `minTurn` degrees (the vertices of an already curved line) and reversals
  * are left as they are.
  */
+/** Douglas-Peucker: drop the points within `tol` metres of the line through their neighbours. A taxi route's nodes
+ *  zig-zag a metre or three either side of the centreline at intersections (OSM ways joined at slightly offset nodes),
+ *  and every jog became its own little curve once the corners were filleted. */
+export function straighten(pts: XY[], tol: number): XY[] {
+  if (pts.length < 3) return pts.slice();
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop()!; let worst = -1, at = -1;
+    for (let k = i + 1; k < j; k++) { const d = distToSegment(pts[k], pts[i], pts[j]); if (d > worst) { worst = d; at = k; } }
+    if (at > 0 && worst > tol) { keep[at] = 1; stack.push([i, at], [at, j]); }
+  }
+  return pts.filter((_, k) => keep[k]);
+}
+
 export function filletCorners(pts: XY[], radius: number | ((corner: XY) => number), minTurn = 20): XY[] {
   const n = pts.length; if (n < 3) return pts.slice();
   const { cum } = arcLengths(pts);
@@ -181,6 +196,33 @@ export function filletCorners(pts: XY[], radius: number | ((corner: XY) => numbe
     used = s1;
   }
   return out.map(o => o.p);
+}
+
+/**
+ * Straight on means straight: where a line leaves a heading and comes back to it within `maxLen` metres, never more than
+ * `maxOff` off the straight line between (a junction drawn a few metres out, a fillet touched and left again), the
+ * points between go. Real bends and shifts to another lane are left alone.
+ */
+export function straightenJogs(pts: XY[], maxLen = 170, maxOff = 7, deg = 7): XY[] {
+  const n = pts.length; if (n < 4) return pts;
+  const H: number[] = []; for (let i = 0; i < n - 1; i++) H.push(headingTo(pts[i], pts[i + 1]));
+  const out: XY[] = []; let i = 0;
+  while (i < n) {
+    out.push(pts[i]);
+    let to = -1;
+    if (i > 0) {
+      const hin = H[i - 1];
+      for (let j = i + 2; j < n - 1; j++) {
+        const L = dist(pts[i], pts[j]); if (L > maxLen) break; if (L < 12) continue;
+        const ch = headingTo(pts[i], pts[j]);
+        if (Math.abs(angleDelta(hin, ch)) > deg || Math.abs(angleDelta(H[j], ch)) > deg) continue;
+        let off = 0, bend = 0; for (let k = i + 1; k < j; k++) { off = Math.max(off, distToSegment(pts[k], pts[i], pts[j])); bend = Math.max(bend, Math.abs(angleDelta(ch, H[k]))); }
+        if (off <= maxOff && off > 0.3 && bend > 4) to = j;
+      }
+    }
+    i = to > 0 ? to : i + 1;
+  }
+  return out;
 }
 
 /**

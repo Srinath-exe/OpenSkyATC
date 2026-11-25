@@ -12,6 +12,7 @@
   GOLD_DIR (default: ml/data/gold of the checkout) and GOLD_PROMPTS (default: public/voice/gold-prompts.json) are
   overridable for tests and the dry run.
 */
+import { withRequestId } from '@/lib/requestId';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -181,7 +182,7 @@ async function savedIds(dir: string, prompts: Map<string, PromptInfo>): Promise<
   return names.filter((n) => n.endsWith('.wav') && prompts.has(n.slice(0, -4))).map((n) => n.slice(0, -4)).sort();
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePost(req: Request): Promise<Response> {
   const dir = goldDir();
   const denied = await authorise(req, dir);
   if (denied) return denied;
@@ -236,7 +237,7 @@ export async function POST(req: Request): Promise<Response> {
   return json({ ok: true, id, sec: record.sec, bytes: record.bytes, count: before.length + (overwritten ? 0 : 1), overwritten });
 }
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGet(req: Request): Promise<Response> {
   const dir = goldDir();
   const denied = await authorise(req, dir);
   if (denied) return denied;
@@ -251,3 +252,6 @@ export async function GET(req: Request): Promise<Response> {
   const ids = await savedIds(dir, prompts);
   return json({ ids, count: ids.length, total: prompts.size });
 }
+
+export const POST = withRequestId(handlePost);
+export const GET = withRequestId(handleGet);

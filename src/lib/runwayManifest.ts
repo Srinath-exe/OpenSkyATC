@@ -843,30 +843,6 @@ export const RUNWAY_MANIFEST: Record<string, RunwayPair[]> = {
       "lengthFt": 13378
     },
     {
-      "ref": "03/21",
-      "ends": [
-        {
-          "name": "03",
-          "hdg": 22.9,
-          "thr": {
-            "lat": 1.315353,
-            "lng": 104.0125409
-          },
-          "lengthFt": 13207
-        },
-        {
-          "name": "21",
-          "hdg": 202.9,
-          "thr": {
-            "lat": 1.3487047,
-            "lng": 104.0266227
-          },
-          "lengthFt": 13207
-        }
-      ],
-      "lengthFt": 13207
-    },
-    {
       "ref": "02L/20R",
       "ends": [
         {

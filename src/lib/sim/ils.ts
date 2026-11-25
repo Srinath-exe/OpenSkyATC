@@ -123,8 +123,11 @@ export function aboveGlideslope(pos: XY, altFt: number, r: ILSRunway): boolean {
 
 // Target heading to track the localizer (proportional correction, clamped ±30°).
 export function locTargetHdg(pos: XY, r: ILSRunway): number {
-  const dev = locDevDeg(pos, r);
-  const corr = Math.max(-30, Math.min(30, dev * 2.5));
+  // steer at a point 700 m ahead on the centreline: the correction follows the distance off the beam (not the angle
+  // seen from the threshold, which far out is tiny: an aircraft captured 600 m off at 10 NM crept in at 2 degrees and
+  // flew parallel to the beam for three minutes); a 600 m offset is closed in about half a minute
+  if (distAlongFwd(pos, r) < -50) return r.locCourse;
+  const corr = Math.max(-30, Math.min(30, Math.atan2(crossTrackM(pos, r), 700) / DEG));
   return ((r.locCourse - corr) + 360) % 360;
 }
 

@@ -321,7 +321,8 @@ test('AI approach assist: three arrivals are sequenced onto the ILS (radar conta
 
 test('auto mode: with the player on ground, AI tower + approach land three arrivals and get two departures out of the TMA; nothing diverts', () => {
   const e = makeEngine('EGLL', { ends: ['27R', '27L'] });
-  e.settings.autoMode = true; e.playerPosition = 'ground';
+  // the player's sector is tower + ground, so the AI works approach; the runways are handed to it explicitly here
+  e.settings.autoMode = true; e.playerPosition = 'ground'; e.settings.autoTower = true;
   const arr = [e.spawnArrival()!, e.spawnArrival()!, e.spawnArrival()!];
   const dep = [e.spawnAt({ callsign: 'DEP1', type: 'A320', kind: 'departure', phase: 'hold_short', runway: '27L', onFrequency: 'tower' }), e.spawnAt({ callsign: 'DEP2', type: 'B738', kind: 'departure', phase: 'hold_short', runway: '27R', onFrequency: 'tower' })];
   const done = runUntil(e, () => arr.every(a => !e.aircraft.includes(a) || ['rollout', 'taxi', 'hold_short', 'arrived'].includes(a.phase)) && dep.every(d => !e.aircraft.includes(d)), 3000, 2);

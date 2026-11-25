@@ -135,7 +135,7 @@ export default function DesignPage() {
     <ToastProvider>
       <div className={s.page} data-testid="design-page">
         <nav className={s.nav}>
-          <span className={s.navTitle}><LogoMark size={28} /> SKYCONTROL design <span className={s.navSub}>dev showcase</span></span>
+          <span className={s.navTitle}><LogoMark size={28} /> OpenATC design <span className={s.navSub}>dev showcase</span></span>
           <div className={s.navLinks}>{SECTIONS.map((id) => <a key={id} href={`#${id}`}>{id}</a>)}</div>
         </nav>
 

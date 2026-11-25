@@ -8,7 +8,8 @@ import { ACTION_MATRIX, ACTION_DEFS, REASONS } from '@/lib/sim/commandTree'
 import type { ActionId, ReasonCode } from '@/lib/sim/commandTree'
 import { ALL_STAGES } from '@/lib/sim/types'
 import { stageLabel } from '@/lib/sim/stage'
-import { SHELL_HOTKEYS, actionHotkeys } from '../hotkeys'
+import { shellHotkeys, actionHotkeys } from '../hotkeys'
+import { useBindings } from '../keybindings'
 import type { Hotkey } from '../hotkeys'
 import { useShell } from '../shellContext'
 import { PHRASES, ALERT_HELP, GLOSSARY } from './phrases'
@@ -34,7 +35,8 @@ function matches(q: string, ...fields: string[]): boolean {
 }
 
 function HotkeysTab({ q }: { q: string }) {
-  const rows = React.useMemo(() => [...SHELL_HOTKEYS, ...actionHotkeys()], [])
+  const keys = useBindings()
+  const rows = React.useMemo(() => [...shellHotkeys(keys), ...actionHotkeys()], [keys])
   const shown = rows.filter((h) => matches(q, h.key, h.action, h.when, REGION_LABEL[h.region]))
   if (!shown.length) return <div className={styles.empty}>No shortcut matches “{q}”.</div>
   return (

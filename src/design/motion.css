@@ -1,4 +1,4 @@
-/* SKYCONTROL motion (01 section 7, A19). Calm: 120-320ms, spec easings. Reduced motion keeps fades only. */
+/* OpenATC motion (01 section 7, A19). Calm: 120-320ms, spec easings. Reduced motion keeps fades only. */
 
 @keyframes ds-enter {
   from { opacity: 0; transform: translateY(8px); filter: blur(8px); }

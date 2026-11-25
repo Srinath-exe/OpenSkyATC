@@ -153,7 +153,7 @@ export function createServerRecognizer(onStatus?: (s: ServerStatus) => void): Re
     start() {
       self.alternatives = [];
       if (!mic.isOpen) self.onPartial?.('Microphone starting…');
-      const s = stream = openSttStream(names, (t) => self.onPartial?.(`${t}…`));   // the phrases heard so far
+      const s = stream = openSttStream(names, (t) => { self.onPartial?.(`${t}…`); self.onLive?.(t) });   // the phrases heard so far
       mic.start((pcm) => s.push(pcm)).then(() => self.onPartial?.('Listening…'))
         .catch((err) => self.onError?.(/denied|not ?allowed/i.test(String(err)) ? 'Microphone access was blocked. Allow it in the browser to talk.' : `Microphone: ${String(err)}`));
     },

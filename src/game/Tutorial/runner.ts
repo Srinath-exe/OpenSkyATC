@@ -8,6 +8,7 @@ import * as React from 'react'
 import { sim } from '@/components/atc/simStore'
 import type { SimEvent } from '@/lib/sim/types'
 import { sendCue, mapListening } from '@/components/atc/WorldMap/tutor'
+import type { Cue } from './lessons'
 import { executeText } from '@/lib/sim/dispatch'
 import { CHAPTERS, setRunner, type Chapter, type Goal, type Live, type Tab } from './lessons'
 
@@ -23,6 +24,9 @@ export interface TutorState {
   version: number
 }
 
+/** Fast-forward: the sim runs this many times real time (the old 11 s a 250 ms tick, plus the real-time 1x). */
+const FF_RATE = 12
+const norm = (t: string) => t.toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim()
 const KEY = 'atc.tutor.progress.v1'
 const readProgress = (): Record<string, true> => { try { return JSON.parse(localStorage.getItem(KEY) ?? '{}') } catch { return {} } }
 
@@ -46,16 +50,20 @@ class Coach {
     // setup calls go straight to the engine (the store holds a player's call for its undo window, which a scene being
     // built in one go cannot wait for)
     setRunner((e, line) => { const r = executeText(e, line); if (!r.result.ok) console.warn('tutor setup call refused:', line, r.result.code, r.result.reason ?? ''); return r })
+    if (!this.cmdTap) {
+      this.cmdTap = (cs, r, _who, text) => { const L = this.live; if (!r.ok || !L || !cs || (cs !== L.ctx.cs && !L.ctx.others.includes(cs))) return; this.given.add(norm(text)); this.gaveCall = true; this.hold(false) }
+      sim.commandTaps.add(this.cmdTap)
+    }
     if (!this.untap) { const tap = (evs: SimEvent[]) => this.onEvents(evs); sim.eventTaps.add(tap); this.untap = () => sim.eventTaps.delete(tap) }
   }
-  dispose(): void { this.stopTick(); this.untap?.(); this.untap = null; sendCue({ kind: 'clear' }) }
+  dispose(): void { this.stopTick(); this.untap?.(); this.untap = null; if (this.cmdTap) sim.commandTaps.delete(this.cmdTap); this.cmdTap = null; sendCue({ kind: 'clear' }) }
 
   setTab(tab: Tab): void { if (tab !== this.state.tab) this.emit({ tab }) }
 
   /** Open a chapter: its story first (unless skipped), then the live scene. */
   open(id: string, opts: { story?: boolean; fresh?: boolean } = {}): void {
     const ch = CHAPTERS.find(c => c.id === id); if (!ch) return
-    this.stopTick(); this.live = null
+    this.stopTick(); this.live = null; this.given.clear()
     sendCue({ kind: 'clear' })
     if (sim.position !== ch.tab) sim.setPosition(ch.tab)
     this.fresh = !!opts.fresh
@@ -76,7 +84,7 @@ class Coach {
     // carry on from where the last mission left the aircraft, unless asked to start again
     const ctx = (!this.fresh && ch.resume ? safe(() => ch.resume!(e), null) : null) ?? ch.setup(e)
     this.fresh = false
-    this.live = { e, ctx, events: [], t0: e.time, selectedId: null }
+    this.live = { e, ctx, events: [], t0: e.time, selectedId: null }; this.cuedGoal = null
     this.opened = new Set()
     if (ch.tab === 'approach') { const a = e.find(ctx.cs); if (a) { sim.select(a.id); sim.centerOn(a.id) } }
     else if (ch.id !== 'g-push') { const a = e.find(ctx.cs); if (a) sim.select(a.id) }
@@ -94,6 +102,9 @@ class Coach {
     window.setTimeout(() => send(80), 150)
     this.startTick()
   }
+
+  /** Stop the mission (the course is on a step without one): the scene stays as it is. */
+  stop(): void { this.stopTick(); this.live = null; sendCue({ kind: 'clear' }); this.emit({ chapter: null, stage: 'idle', met: new Set(), notes: [] }) }
 
   /** Free play: traffic on, the coach steps back. */
   freePlay(): void {
@@ -124,6 +135,8 @@ class Coach {
     if (finished) { const progress = { ...this.state.progress, [ch.id]: true as const }; try { localStorage.setItem(KEY, JSON.stringify(progress)) } catch { /* */ } this.emit({ met, stage: 'done', progress }) }
     else this.emit({ met })
   }
+  /** The aircraft the live chapter is about (its callsign). */
+  target(): string | null { return this.live?.ctx.cs ?? null }
   phrase(g: Goal | null): string | null { return g?.say && this.live ? safe(() => g.say!(this.live!), null) : null }
 
   private isOpen(g: Goal, L: Live): boolean {
@@ -132,21 +145,63 @@ class Coach {
     return false
   }
   private startTick() { this.stopTick(); this.timer = setInterval(() => this.tick(), 250) }
-  private stopTick() { if (this.timer) clearInterval(this.timer); this.timer = null; this.setFast(false) }
+  private stopTick() { if (this.timer) clearInterval(this.timer); this.timer = null; this.setFast(false); this.hold(false) }
 
-  /** True while the coach is fast-forwarding (the lesson aircraft is pushing back or starting its engines). The tick
-   *  steps the sim itself (11 s of sim per 250 ms on top of real time, so 12x), not through the frame loop, so the speed
-   *  does not depend on the frame rate. */
+  /** True while the coach is fast-forwarding (the lesson aircraft is pushing back or starting its engines): the store's
+   *  frame loop then runs the sim FF_RATE times real time, so every frame moves it a little (smooth); headless (tests)
+   *  the 4 Hz tick steps it instead. */
   fast = false
-  private setFast(on: boolean): void { if (on === this.fast) return; this.fast = on; this.emit() }
+  private curKey = ''
+  private curSince = 0
+  private setFast(on: boolean, rate = FF_RATE): void { sim.boost = this.held ? 0 : on ? rate : 1; if (on === this.fast) return; this.fast = on; this.emit() }
+  /** The game frozen on a `hold` call until the player gives it (released by the call, or on leaving the mission). */
+  private held = false
+  private gaveCall = false
+  private cuedGoal: string | null = null
+  private hold(on: boolean): void {
+    // time stopped (the frame loop runs the sim at 0x), not the game's pause: a paused game refuses calls
+    if (on === this.held) return
+    this.held = on; sim.boost = on ? 0 : 1; sim.emit()
+  }
+  private cmdTap: ((cs: string | null, r: { ok: boolean }, who: string, text: string) => void) | null = null
+  /** Calls the player gave in this mission (normalised): a call sent the moment its card appeared never holds the game. */
+  private given = new Set<string>()
+  /** Fast-forward speed: slow (1.5x) while a lesson aircraft is on or just above a runway - a takeoff or a landing is
+   *  worth seeing - and fast for the long parts (pushback, engine start, taxi, a long final). */
+  private ffRate(L: Live): number {
+    const near = [L.ctx.cs, ...L.ctx.others].some((cs) => {
+      const a = L.e.find(cs); if (!a) return false
+      if (a.phase === 'takeoff' || a.phase === 'rollout') return true
+      // airborne: only low down (an arrival is in 'landing' all the way down the final: 7 miles at 1.5x was minutes)
+      return (a.altitude > 5 || a.phase === 'landing') && a.altitude < (a.plan.kind === 'arrival' ? 700 : 1500) && (a.phase === 'climb' || a.phase === 'approach' || a.phase === 'descent' || a.phase === 'landing' || a.phase === 'go_around')
+    })
+    return near ? 1.5 : FF_RATE
+  }
+  private fastStep(s: number): void {
+    // in the browser the store's own frame loop runs the sim faster (sim.boost, set with `fast`), so every rendered frame
+    // moves the aircraft a little: stepping it from this 4 Hz tick (or in bursts) drew it in hops
+    if (typeof requestAnimationFrame === 'undefined') sim.step(s)
+  }
 
   private tick(): void {
     const ch = this.state.chapter, L = this.live; if (!ch || !L || this.state.stage === 'story') { this.setFast(false); return }
     if (ch.tick) safe(() => ch.tick!(L), undefined)
     const a = L.e.find(L.ctx.cs)
     // only while the mission is being played: behind the completion card the sim runs at its own pace
-    this.setFast(this.state.stage === 'live' && !!a && (a.phase === 'pushback' || a.phase === 'startup'))
-    if (this.fast && !sim.paused) sim.step(0.25 * 11)
+    // fast-forward whenever the player has nothing to do: the objective is to watch, or its call has been made and
+    // read back and the aircraft is now doing it (a long taxi, a landing, a turn onto the localizer)
+    const cur = this.current(), phrase = this.phrase(cur), key = `${cur?.id ?? ''}|${phrase ?? ''}`
+    if (key !== this.curKey) { this.curKey = key; this.curSince = L.e.time; this.gaveCall = false }
+    if (cur && cur.id !== this.cuedGoal) { this.cuedGoal = cur.id; for (const c of safe(() => cur.cues?.(L) ?? [], [] as Cue[])) sendCue(c) }
+    // a `hold` call: the game waits, frozen, until the player gives it
+    this.hold(this.state.stage === 'live' && !!cur?.hold && !!phrase && !this.gaveCall && !this.given.has(norm(phrase)))
+    const answered = L.events.some(ev => ev.type === 'readback' && ev.at >= this.curSince && ev.at < L.e.time - 2 && (ev.callsign === L.ctx.cs || L.ctx.others.includes(ev.callsign)))
+    const idle = !!cur && (!phrase || answered) || (!cur && this.state.stage === 'live')
+    // never while a call is waiting on the player: the pilot's open request recalls every 45 sim s, which at 44x was
+    // "Lufthansa 455, standing by" every second
+    const waiting = !!phrase && !answered && !!a && a.requests.some(r => r.answeredAt == null)
+    this.setFast(this.state.stage === 'live' && !this.held && !waiting && (idle || (!!a && (a.phase === 'pushback' || a.phase === 'startup')) || (!!ch.fastWhile && safe(() => ch.fastWhile!(L), false))), this.ffRate(L))
+    if (this.fast && !sim.paused) this.fastStep(0.25 * 11)
     L.selectedId = sim.selectedId
     const met = new Set(this.state.met); let changed = false
     for (const g of ch.goals) {
@@ -184,8 +239,11 @@ class Coach {
 
 function safe<T>(fn: () => T, fallback: T): T { try { return fn() } catch { return fallback } }
 
-export const coach = new Coach()
-if (typeof window !== 'undefined') (window as unknown as { __coach?: Coach }).__coach = coach   // headless checks drive the missions
+// one coach per page, kept across hot reloads: a reload that built a second one left two coaches fighting over the
+// game's speed (frozen after a call was given) or a card waiting on a coach with no mission ("Getting the aircraft
+// ready" for ever). Edits to the coach or the lessons apply on the next page load.
+const w = (typeof window !== 'undefined' ? window : {}) as { __coach?: Coach }
+export const coach: Coach = w.__coach ?? (w.__coach = new Coach())   // (window.__coach: headless checks drive the missions)
 export function useCoach<T>(sel: (s: TutorState) => T): T {
   return React.useSyncExternalStore(coach.subscribe, () => sel(coach.state), () => sel(coach.state))
 }

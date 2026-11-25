@@ -1,16 +1,22 @@
 'use client'
 /* Top bar (UX 04 §2.1 / §10 "Top bar", design 01 §4.9, A11.8, A11.9, A15). */
+import { IATA } from '@/game/Board/flightInfo'
 import * as React from 'react'
 import Link from 'next/link'
 import styles from './NavBar.module.css'
 import { Tabs, Pill, IconButton, Segmented, Tooltip, LogoMark, IconPause, IconPlay, IconBell, IconSettings, Icon, cx, useCountUp, formatThousands } from '@/design'
 import type { PlayerPosition, Sector } from '@/lib/sim/types'
 import { sectorAi, sectorPatch } from '@/components/atc/simStore'
+import { HIGHLIGHT_STYLES, getHighlightStyle, setHighlightStyle, type HighlightStyle } from '@/components/atc/MapboxMap/highlight'
+import { openTaxiMap } from '@/game/TaxiMap/feed'
+import { openReport } from '../Report/Report'
+import { RunwayPicker } from './RunwayPicker'
 import { sim, useSim } from '../hooks/useSimSelector'
 import { formatSimClock } from '../hooks/useSimSelector'
 import { useUtcClock } from '../hooks/useClock'
 import { useShell } from '../shellContext'
-import { TxIndicator } from '../TxIndicator/TxIndicator'
+import { useLayout } from '../layout'
+import { TxIndicator, useTxLit } from '../TxIndicator/TxIndicator'
 
 const POSITIONS: PlayerPosition[] = ['tower', 'approach']
 
@@ -129,8 +135,8 @@ function Clock() {
   return (
     <div ref={wrap} className={styles.clockWrap}>
       <button type="button" className={styles.clock} onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-haspopup="dialog" data-testid="clock-utc" title="Sim time and rate">
-        <span data-testid="clock">{utc ? `${utc}Z` : '--:--:--Z'}</span>
-        <span className={styles.clockSim}>{formatSimClock(simT)}</span>
+        <span data-testid="clock"><Digits text={utc ? `${utc}Z` : '--:--:--Z'} /></span>
+        <span className={styles.clockSim}><Digits text={formatSimClock(simT)} /></span>
       </button>
       {open ? (
         <div className={styles.popover} role="dialog" aria-label="Sim time" data-testid="clock-popover">
@@ -275,13 +281,181 @@ export function NavBar() {
     return s.alerts().some((a) => a.severity === 'critical' && !a.ack && t - a.createdAt > 10)
   })
   const position = useSim((s) => s.position)
+  const layout = useLayout()
+  if (layout === 'classic') return <ClassicNav name={name} icao={icao} escalated={escalated} position={position} />
   return (
-    <nav className={styles.nav} data-escalated={escalated} aria-label="Top bar">
+    <nav className={styles.nav} data-layout="board" data-escalated={escalated} aria-label="Top bar">
+      {/* three floating pills (the map shows between them): where you are, the time, how it is going */}
+      <div className={styles.pill}>
+        <Link href="/start" prefetch={false} className={styles.brand} data-testid="brand-home" onClick={(e) => { if (sim.engine) { e.preventDefault(); shell.show('leaveConfirm') } }} title={name && name !== icao ? `${name} · Home` : 'Home'}>
+          <span className={styles.brandMark}><LogoMark size={24} /></span>
+          <span className={styles.brandApt}>{icao ? (icao.length === 4 && icao[0] === 'K' ? icao.slice(1) : IATA[icao] ?? icao) : '—'}</span>
+        </Link>
+        <PositionSwitch />
+      </div>
+      <div className={styles.mid}>
+        <div className={styles.pill}>
+          <Clock />
+          <span className={styles.vsep} aria-hidden="true" />
+          <RunwayPicker />
+          <Speed />
+        </div>
+        <button type="button" className={styles.taxiMap} onClick={() => openTaxiMap()} title="Taxi map in its own window, for a second screen" data-testid="open-taxi-map">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20V9a3 3 0 0 1 3-3h10" /><path d="M4 14h8a3 3 0 0 1 3 3v3" /><path d="M14 3l3 3-3 3" /></svg>
+          <span>Taxi map</span>
+        </button>
+      </div>
+      <div className={styles.pill}>
+        <ScoreChip />
+        <span className={styles.vsep} aria-hidden="true" />
+        <AlertsButton />
+        <ReportButton />
+        <SettingsButton />
+        <VoiceButton />
+        <MoreMenu />
+      </div>
+      <span className="sr-only" aria-live="polite">{position} position</span>
+    </nav>
+  )
+}
+
+/** The two jobs, each with its own AI switch: click the name to work it, the AI chip to hand it to the AI (or take
+ *  it back). A sector the AI is running glows green. */
+function PositionSwitch() {
+  const position = useSim((s) => s.position)
+  const hasRadar = useSim((s) => !!s.radar)
+  const aiTwr = useSim((s) => sectorAi(s.settings, 'airfield'))
+  const aiApp = useSim((s) => sectorAi(s.settings, 'approach'))
+  const tab = (p: PlayerPosition, sector: Sector, ai: boolean, disabled: boolean) => {
+    const on = position === p || (p === 'tower' && position === 'ground')
+    const flip = () => sim.updateSettings(sectorPatch(sector, !ai))
+    // the sector you are not on is always the AI's (so both keep working); its chip shows that, and its switch is
+    // for when you go there
+    const auto = !on && !ai
+    ai = ai || !on
+    return (
+      <div className={styles.posTab} data-on={on || undefined} data-ai={ai || undefined} data-disabled={disabled || undefined}>
+        <button type="button" className={styles.posBtn} disabled={disabled} onClick={() => sim.setPosition(p)} aria-pressed={on} data-testid={`mode-tab-${p}`}
+          title={disabled ? 'No radar for this airport' : on ? `You are on ${SECTOR_LABEL[sector]}` : `Switch to ${SECTOR_LABEL[sector]}`}>{TAB_LABEL[p]}</button>
+        {disabled ? null : (
+          <span role="switch" tabIndex={0} aria-checked={ai} aria-label={`AI on ${SECTOR_LABEL[sector]}`} className={styles.aiSw} data-on={ai || undefined} data-auto={auto || undefined}
+            title={auto ? `The AI is running ${SECTOR_LABEL[sector]} (${SECTOR_JOB[sector]}) while you are on the other one. Click to keep it with the AI when you switch.` : ai ? `AI is running ${SECTOR_LABEL[sector]} (${SECTOR_JOB[sector]}). Click to take it over.` : `Hand ${SECTOR_LABEL[sector]} (${SECTOR_JOB[sector]}) to the AI`}
+            onClick={auto ? () => sim.updateSettings(sectorPatch(sector, true)) : flip} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (auto ? () => sim.updateSettings(sectorPatch(sector, true)) : flip)() } }} data-testid={`sector-ai-${sector}`}>
+            <span className={styles.aiLbl}>{ai ? 'AI ON' : 'AI OFF'}</span>
+          </span>
+        )}
+      </div>
+    )
+  }
+  return (
+    <div className={styles.posSwitch} data-testid="position-tabs">
+      {tab('tower', 'airfield', aiTwr, false)}
+      {tab('approach', 'approach', aiApp, !hasRadar)}
+    </div>
+  )
+}
+
+/** The bar's one button: 34 px round, an 18 px line icon. Rest: quiet; hover: lit; active (on / open): solid white. */
+function NavButton({ label, icon, active, badge, onClick, testId, ...rest }: { label: string; icon: React.ReactNode; active?: boolean; badge?: number; onClick: () => void; testId?: string } & Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'>) {
+  return (
+    <button type="button" className={styles.nb} data-active={active || undefined} aria-label={label} title={label} aria-pressed={rest['aria-expanded'] == null ? !!active : undefined} onClick={onClick} data-testid={testId} {...rest}>
+      {icon}{badge ? <em className={styles.nbBadge}>{badge > 9 ? '9+' : badge}</em> : null}
+    </button>
+  )
+}
+/** A ticking number that never changes width: every digit in its own fixed slot (the face's figures are proportional). */
+function Digits({ text }: { text: string }) {
+  return <>{text.split('').map((c, i) => <span key={i} className={/[0-9]/.test(c) ? styles.dg : c === ':' ? styles.dgColon : undefined}>{c}</span>)}</>
+}
+/** Pause and the three speeds: one control. */
+function Speed() {
+  const rate = useSim((s) => s.rate)
+  const paused = useSim((s) => s.paused)
+  return (
+    <div className={styles.speed} role="group" aria-label="Game speed">
+      <NavButton label={paused ? 'Resume (P)' : 'Pause (P)'} icon={paused ? <IconPlay size={16} /> : <IconPause size={16} />} active={paused} onClick={() => sim.togglePause()} testId="rate-pause" data-state={paused ? 'paused' : 'running'} />
+      <span className={styles.speedSeg}>
+        {([1, 2, 4] as const).map((r) => (
+          <button key={r} type="button" className={styles.speedBtn} data-on={(!paused && rate === r) || undefined} aria-pressed={rate === r} onClick={() => { sim.setRate(r); if (sim.paused) sim.setPaused(false) }} data-testid={`rate-${r}x`}><span className={styles.speedNum}>{r}</span><span className={styles.speedX}>×</span></button>
+        ))}
+      </span>
+    </div>
+  )
+}
+function SettingsButton() {
+  const shell = useShell()
+  return <NavButton label="Settings" icon={<IconSettings size={18} />} active={!!shell.open.settings} aria-expanded={!!shell.open.settings} onClick={() => shell.toggle('settings')} testId="settings-btn" />
+}
+function AlertsButton() {
+  const shell = useShell()
+  const unacked = useSim((s) => s.alerts().filter((a) => !a.ack && a.severity !== 'info').length)
+  return <NavButton label={unacked ? `Alerts, ${unacked} new` : 'Alerts'} icon={<IconBell size={18} />} badge={unacked} active={!!shell.open.alerts} aria-expanded={!!shell.open.alerts} data-dropdown-trigger="alerts" onClick={() => shell.toggle('alerts')} testId="alerts-bell" />
+}
+/** Show us what is wrong on this screen: a recording, a screenshot or one part of it (src/feedback). */
+function ReportButton() {
+  return <NavButton label="Report something on this screen (Ctrl Shift U)" icon={<Icon name="report" size={18} />} onClick={openReport} testId="report-btn" aria-haspopup="menu" data-report-anchor="" />
+}
+/** Pilot and ATC voices on / off; a red dot while anyone is transmitting. */
+function VoiceButton() {
+  const shell = useShell()
+  const tts = useSim((s) => s.settings.tts)
+  const on = useTxLit()
+  return (
+    <span className={styles.voiceWrap} data-tx={shell.ptt || undefined}>
+      <NavButton label={tts ? 'Voices on' : 'Voices off'} icon={<Icon name={tts ? 'volume-2' : 'volume-x'} size={18} />} active={!tts} onClick={() => sim.toggleTTS()} testId="tx-indicator"
+        aria-pressed={tts} data-voice={tts ? 'on' : 'off'} data-state={on ? 'tx' : 'idle'} />
+    </span>
+  )
+}
+
+/** Everything the bar used to show as its own button: weather, runways, autopilot, settings, help. */
+function MoreMenu() {
+  const shell = useShell()
+  const [open, setOpen] = React.useState(false)
+  const wrap = React.useRef<HTMLDivElement>(null)
+  const auto = useSim((s) => sectorAi(s.settings, 'airfield') && sectorAi(s.settings, 'approach'))
+  const [hl, setHl] = React.useState<HighlightStyle>('none')
+  React.useEffect(() => { setHl(getHighlightStyle()) }, [open])
+  React.useEffect(() => {
+    if (!open) return
+    const onDown = (e: PointerEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); e.stopPropagation() } }
+    document.addEventListener('pointerdown', onDown); document.addEventListener('keydown', onKey, true)
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey, true) }
+  }, [open])
+  const item = (label: string, hint: string | null, on: () => void, testId: string) => (
+    <button type="button" className={styles.menuItem} onClick={() => { setOpen(false); on() }} data-testid={testId}><span>{label}</span>{hint ? <small>{hint}</small> : null}</button>
+  )
+  return (
+    <div ref={wrap} className={styles.moreWrap}>
+      <NavButton label="More" icon={<Icon name="more-horizontal" size={18} />} active={open} aria-expanded={open} aria-haspopup="menu" onClick={() => setOpen((v) => !v)} testId="nav-more" />
+      {open ? (
+        <div className={styles.menu} role="menu">
+          {item('Weather and ATIS', null, () => shell.toggle('atis'), 'atis-chip')}
+          {item('Runways and airport', null, () => shell.show('runwayConfig'), 'airport-badge')}
+          {item(auto ? 'Autopilot: on' : 'Autopilot', auto ? 'AI is working every position' : 'Let the AI play', () => sim.updateSettings({ ...sectorPatch('airfield', !auto), ...sectorPatch('approach', !auto) }), 'nav-autopilot')}
+          <span className={styles.menuSep} />
+          <div className={styles.menuGroup}><small>Selected aircraft</small>
+            <div className={styles.menuChips}>{HIGHLIGHT_STYLES.map((h) => <button key={h.id} type="button" data-on={hl === h.id || undefined} onClick={() => { setHighlightStyle(h.id); setHl(h.id) }} data-testid={`highlight-${h.id}`}>{h.label}</button>)}</div>
+          </div>
+          <span className={styles.menuSep} />
+          {item('Help', '?', () => shell.toggle('help'), 'help-btn')}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** The classic layout's top bar (with the strip bay and the command panel): the original full-width bar. */
+function ClassicNav({ name, icao, escalated, position }: { name: string | null | undefined; icao: string | null | undefined; escalated: boolean; position: string }) {
+  const shell = useShell()
+  return (
+    <nav className={styles.nav} data-layout="classic" data-escalated={escalated} aria-label="Top bar">
       <div className={styles.left}>
         <Link href="/start" prefetch={false} className={styles.brand} data-testid="brand-home" onClick={(e) => { if (sim.engine) { e.preventDefault(); shell.show('leaveConfirm') } }} title="Home">
           <span className={styles.brandMark}><LogoMark size={28} /></span>
           <span className={styles.brandText}>
-            <span className={styles.brandWord}>Skycontrol</span>
+            <span className={styles.brandWord}>OpenATC</span>
             <span className={styles.brandSub}>{name && name !== icao ? `${name} · ${icao}` : icao || 'No airport'}</span>
           </span>
         </Link>
@@ -298,6 +472,9 @@ export function NavBar() {
         <RateControl />
         <ScoreChip />
         <AlertsBell />
+        <Tooltip content="Report" placement="bottom">
+          <IconButton size={40} variant="glass" label="Report something on this screen" icon={<Icon name="report" size={20} />} onClick={openReport} testId="report-btn" data-report-anchor="" />
+        </Tooltip>
         <TxIndicator />
         <Tooltip content="Settings" placement="bottom">
           <IconButton size={40} variant="glass" label="Settings" icon={<IconSettings size={20} />} active={!!shell.open.settings} onClick={() => shell.toggle('settings')} testId="settings-btn" />

@@ -546,7 +546,10 @@
   "heard": "speedbird three two seven how is the ride up there any bumps",
   "ctx": "@APP 27R 27L\nAFR684 air france 684 ARR APP cruise 8000ft h266 27L\nBAW327 speedbird 327 ARR APP cruise 7000ft h163 27L\nBAW96 speedbird 96 ARR APP cruise 7000ft h252 27L\nKLM722 klm 722 ARR APP cruise 4000ft h297 27L\nSCO498 scooter 498 ARR APP cruise 3000ft h276 27L\nUAL884 united 884 DEP DEP climb 1900ft h323 27R\nUPS973 ups 973 ARR APP cruise 5000ft h075 27L\nVIR497 virgin 497 ARR APP approach 10000ft h083 27L\nBAW273 speedbird 273 DEP TWR hold_short h036 27R\nBAW50 speedbird 50 ARR GND taxi h081 27L\nEZY101 easy 101 DEP GND taxi h050 27R\nFDB308 sky dubai 308 ARR GND taxi h144 27R\nJAL649 japan air 649 DEP EXT departed 10300ft h059 27R\nKLM744 klm 744 DEP GND taxi h089 27R",
   "line": "SAY AGAIN",
-  "icao": "EGLL"
+  "icao": "EGLL",
+  "accept": [
+   "BAW327 Report ride"
+  ]
  },
  {
   "key": "ic1",

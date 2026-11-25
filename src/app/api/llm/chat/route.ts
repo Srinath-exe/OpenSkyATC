@@ -8,6 +8,7 @@
   A request may name its own endpoint only when it points at this machine / the private LAN or a host listed in
   LLM_ALLOW_HOSTS (comma separated) — the proxy must not become an open relay.
 */
+import { withRequestId } from '@/lib/requestId';
 import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
@@ -40,7 +41,7 @@ function upstreamHeaders(key: string | undefined): Record<string, string> {
   return h;
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePost(req: Request): Promise<Response> {
   let body: { model?: string; messages?: unknown; temperature?: number; max_tokens?: number; endpoint?: string; apiKey?: string; stream?: boolean };
   try { body = await req.json(); } catch { return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 }); }
   if (!Array.isArray(body.messages) || !body.messages.length) return NextResponse.json({ error: 'messages[] required' }, { status: 400 });
@@ -61,7 +62,7 @@ export async function POST(req: Request): Promise<Response> {
   } finally { clearTimeout(timer); }
 }
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGet(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const r = resolveBase(url.searchParams.get('endpoint') || undefined);
   if ('error' in r) return NextResponse.json({ error: r.error }, { status: 403 });
@@ -75,3 +76,6 @@ export async function GET(req: Request): Promise<Response> {
     return NextResponse.json({ error: `upstream ${r.base}: ${err instanceof Error ? err.message : String(err)}` }, { status: 502 });
   } finally { clearTimeout(timer); }
 }
+
+export const POST = withRequestId(handlePost);
+export const GET = withRequestId(handleGet);

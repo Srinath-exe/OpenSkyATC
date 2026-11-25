@@ -5,6 +5,7 @@
   column in the panel, a grid that uses the width on the page. Every change applies at once and stays on this device.
 */
 import * as React from 'react'
+import { worldSound } from '@/components/atc/worldSound'
 import { ListRow, Toggle, Select, Pill, Button, Icon, Input, Segmented, Kpi, EmptyState, cx, formatThousands } from '@/design'
 import type { MenuOption } from '@/design'
 import type { IconName } from '@/design/icons'
@@ -21,16 +22,20 @@ import type { VoiceEngine } from '@/lib/voice/recognizer'
 import { EV_REPLAY_TIPS } from '../HelpOverlay/OnboardingTips'
 import { PRESETS, setGraphicsPref, useDetected, useGraphicsPref } from '@/components/atc/WorldMap/quality'
 import type { GraphicsPref } from '@/components/atc/WorldMap/quality'
-import { setLook, useLook } from '@/components/atc/WorldMap/cinematic'
-import { setPilotVoice, setVoiceEngine, useVoicePrefs } from '@/lib/models/manager'
+import { downloadModel, setPilotVoice, setVoiceEngine, useModels, useVoicePrefs } from '@/lib/models/manager'
 import { ModelsPanel } from './ModelsPanel'
+import { KeyBindings, KeyCapture } from './KeyBindings'
+import { AudioDevices, VoiceTest } from './VoiceTest'
 import s from './SettingsTabs.module.css'
 import { openReport } from '../Report/Report'
+import { mapboxAvailable, setMapEngine, useMapEngine } from '@/components/atc/MapboxMap/engine'
 
-export type TabId = 'gameplay' | 'voice' | 'audio' | 'graphics' | 'models' | 'data' | 'about'
+export type TabId = 'gameplay' | 'traffic' | 'voice' | 'keys' | 'audio' | 'graphics' | 'models' | 'data' | 'about'
 const TABS: { id: TabId; label: string; hint: string; icon: IconName }[] = [
-  { id: 'gameplay', label: 'Gameplay', hint: 'Seats, traffic, pilots', icon: 'plane' },
-  { id: 'voice', label: 'Voice & input', hint: 'Speech, commands, keys', icon: 'radio' },
+  { id: 'gameplay', label: 'Gameplay', hint: 'Seats, pilots, radio', icon: 'plane' },
+  { id: 'traffic', label: 'Traffic', hint: 'How much, how often, what types', icon: 'plane-takeoff' as IconName },
+  { id: 'voice', label: 'Voice & input', hint: 'Speech, commands, microphone', icon: 'radio' },
+  { id: 'keys', label: 'Keys', hint: 'Talk key and shortcuts', icon: 'keyboard' },
   { id: 'audio', label: 'Audio', hint: 'Sound and pilot voices', icon: 'volume-2' },
   { id: 'graphics', label: 'Graphics', hint: 'Quality, look, map', icon: 'layers' },
   { id: 'models', label: 'AI models', hint: 'Download, run on device', icon: 'sparkles' },
@@ -62,7 +67,9 @@ export function SettingsTabs({ variant, initial = 'gameplay', onLeave }: { varia
         <div className={s.head}><h2 className={s.title}>{tabs.find((t) => t.id === tab)?.label}</h2></div>
         <div className={s.groups} data-tab={tab}>
           {tab === 'gameplay' && <Gameplay />}
+          {tab === 'traffic' && <Traffic />}
           {tab === 'voice' && <VoiceInput />}
+          {tab === 'keys' && <KeyBindings Group={Group} />}
           {tab === 'audio' && <Audio />}
           {tab === 'graphics' && <Graphics inGame={variant === 'panel'} onLeave={onLeave} />}
           {tab === 'models' && <><ModelsPanel wide={variant === 'page'} /><Llm /></>}
@@ -99,7 +106,55 @@ const EMERG: MenuOption<Settings['emergencyRate']>[] = [
 const REGION: MenuOption<Settings['region']>[] = [
   { value: 'auto', label: 'Automatic', description: 'FAA at K-airports, ICAO elsewhere' }, { value: 'ICAO', label: 'ICAO' }, { value: 'FAA', label: 'FAA' },
 ]
+const NAMES = [{ id: 'auto', label: 'Auto' }, { id: 'real', label: 'Real' }, { id: 'simple', label: 'Simple' }]
+const NAMES_HINT = { auto: 'Real at San Francisco, simple everywhere else. Change it any time, also during a shift', real: "The airport's own names, as on its charts", simple: 'Long taxiways A, B, C; exits and links numbered in order (K1, K2); stands by number (101, 102)' }
 const YOU_AI = [{ id: 'you', label: 'You' }, { id: 'ai', label: 'AI' }]
+
+/** Traffic management: how much traffic, how often, the mix and the aircraft sizes; applies to new flights at once. */
+const SIZES: Array<{ id: 'L' | 'M' | 'H' | 'S'; label: string; hint: string }> = [
+  { id: 'L', label: 'Light', hint: 'Regional props and small jets' },
+  { id: 'M', label: 'Medium', hint: 'A320s, 737s: most of the traffic' },
+  { id: 'H', label: 'Heavy', hint: '777s, 787s, 747s: wake turbulence spacing' },
+  { id: 'S', label: 'Super', hint: 'The A380: the biggest wake of all' },
+]
+function Traffic() {
+  const st = useSettings()
+  const t = useSim((x) => x.traffic)
+  const LIMIT_MAX = 24
+  const v = t.limit ?? LIMIT_MAX
+  const dep = Math.round((t.depShare ?? 0.55) * 100)
+  return (
+    <>
+      <Group title="How much" hint="Changes apply to new flights straight away; nothing already flying is removed">
+        <ListRow flush title="Difficulty" subtitle="The base traffic level for new shifts; the start screen can override it" trailing={<Segmented small ariaLabel="Difficulty" value={st.difficulty} onChange={(x) => set({ difficulty: x as Difficulty })} items={[{ id: 'low', label: 'Low' }, { id: 'normal', label: 'Normal' }, { id: 'high', label: 'High' }]} testId="set-difficulty" />} />
+        <ListRow flush title="New flights" subtitle="How often a new flight appears" trailing={<Segmented small ariaLabel="Traffic pace" value={t.pace} onChange={(x) => sim.setTraffic({ pace: x as 'quiet' | 'normal' | 'busy' })} items={[{ id: 'quiet', label: 'Quiet' }, { id: 'normal', label: 'Normal' }, { id: 'busy', label: 'Busy' }]} testId="set-traffic-pace" />} />
+        <div className={s.slider}>
+          <div className={s.sliderHead}><span>Traffic at once</span><b>{t.limit == null ? 'No limit' : `Up to ${t.limit} aircraft`}</b></div>
+          <input type="range" min={2} max={LIMIT_MAX} step={1} value={v} className={s.range} style={{ ['--p' as string]: `${((v - 2) / (LIMIT_MAX - 2)) * 100}%` }}
+            onChange={(ev) => { const n = Number(ev.target.value); sim.setTraffic({ limit: n >= LIMIT_MAX ? null : n }) }} aria-label="Traffic at once" aria-valuetext={t.limit == null ? 'No limit' : `${t.limit} aircraft`} data-testid="set-traffic-limit" />
+          <p>New flights wait while you are at the limit. Also in the pause menu.</p>
+        </div>
+      </Group>
+      <Group title="What kind" hint="Which flights the airport gets">
+        <div className={s.slider}>
+          <div className={s.sliderHead}><span>Departures and arrivals</span><b>{dep}% departures · {100 - dep}% arrivals</b></div>
+          <input type="range" min={10} max={90} step={5} value={dep} className={s.range} style={{ ['--p' as string]: `${((dep - 10) / 80) * 100}%` }}
+            onChange={(ev) => sim.setTraffic({ depShare: Number(ev.target.value) / 100 })} aria-label="Share of departures" data-testid="set-traffic-mix" />
+          <p>Tower mostly works departures off the gates; Approach mostly works arrivals.</p>
+        </div>
+        {SIZES.map((z) => {
+          const on = t.sizes.includes(z.id)
+          const last = on && t.sizes.length === 1
+          return <ListRow key={z.id} flush title={z.label} subtitle={z.hint} trailing={<Mirror on={on}><Toggle checked={on} disabled={last} onChange={(x) => sim.setTraffic({ sizes: x ? [...t.sizes, z.id] : t.sizes.filter((y) => y !== z.id) })} testId={`set-traffic-size-${z.id}`} /></Mirror>} />
+        })}
+      </Group>
+      <Group title="Events">
+        <ListRow flush title="Emergencies" subtitle="How often pilots declare" trailing={<Select size="m" ariaLabel="Emergency rate" options={EMERG} value={st.emergencyRate} onChange={(x) => set({ emergencyRate: x })} className={s.select} testId="set-emergency-rate" />} />
+      </Group>
+      <div className={s.sliderReset}><Button variant="ghost" size="sm" onClick={() => sim.setTraffic({ limit: null, pace: 'normal', depShare: null, sizes: ['L', 'M', 'H', 'S'] })} testId="set-traffic-reset">Reset traffic to default</Button></div>
+    </>
+  )
+}
 
 function Gameplay() {
   const st = useSettings()
@@ -110,10 +165,9 @@ function Gameplay() {
         <ListRow flush title="Approach" subtitle="Radar: arrivals onto the ILS, departures climbed out" trailing={<Segmented small ariaLabel="Approach controller" items={YOU_AI} value={sectorAi(st, 'approach') ? 'ai' : 'you'} onChange={(v) => set(sectorPatch('approach', v === 'ai'))} testId="set-sector-approach" />} />
         <ListRow flush title="Automatic handoffs" subtitle="Frequency changes at 1,000 ft on departure and 10 NM established" trailing={<Mirror on={st.autoHandoff}><Toggle checked={st.autoHandoff} onChange={(v) => set({ autoHandoff: v })} testId="set-auto-handoff" /></Mirror>} />
       </Group>
-      <Group title="Traffic">
-        <ListRow flush title="Difficulty" subtitle="Default for new shifts; the setup page can override it" trailing={<Segmented small ariaLabel="Difficulty" value={st.difficulty} onChange={(v) => set({ difficulty: v as Difficulty })} items={[{ id: 'low', label: 'Low' }, { id: 'normal', label: 'Normal' }, { id: 'high', label: 'High' }]} testId="set-difficulty" />} />
-        <ListRow flush title="Emergencies" subtitle="How often pilots declare" trailing={<Select size="m" ariaLabel="Emergency rate" options={EMERG} value={st.emergencyRate} onChange={(v) => set({ emergencyRate: v })} className={s.select} testId="set-emergency-rate" />} />
+      <Group title="Radio">
         <ListRow flush title="Phraseology" subtitle="Wording in transmissions and readbacks" trailing={<Select size="m" ariaLabel="Phraseology" options={REGION} value={st.region} onChange={(v) => set({ region: v })} className={s.select} testId="set-phraseology" />} />
+        <ListRow flush title="Taxiway and stand names" subtitle={NAMES_HINT[st.naming]} trailing={<Segmented small ariaLabel="Taxiway and stand names" items={NAMES} value={st.naming} onChange={(v) => set({ naming: v as 'auto' | 'real' | 'simple' })} testId="set-naming" />} />
       </Group>
       <Group title="Pilots">
         <ListRow flush title="Response delay" subtitle="Time before a crew reads back; also your undo window" trailing={<Select size="m" ariaLabel="Pilot response delay" options={DELAYS} value={delayKey(st.pilotDelayS)} onChange={(v) => set({ pilotDelayS: v === 'auto' ? null : Number(v) })} className={s.select} tabular testId="set-pilot-delay" />} />
@@ -125,10 +179,40 @@ function Gameplay() {
 }
 
 // ── voice & input ──
+/** The guided download of our speech model to this device: what it is, the size, then progress, then done. */
+function SttDownload({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+  const { states } = useModels()
+  const st = states.stt
+  const busy = st.state === 'downloading'
+  React.useEffect(() => { if (st.state === 'ready') onDone() }, [st.state, onDone])
+  // nothing downloads until the player presses Download (below)
+  return (
+    <div className={s.dl} data-testid="stt-download">
+      <div className={s.dlHead}>
+        <Icon name="arrow-down" size={18} />
+        <div>
+          <p className={s.dlTitle}>Download ATC-ASR to this device</p>
+          <p className={s.dlSub}>Our speech model, fine-tuned on ATC radio. 136 MB, downloaded once and kept. After that it works offline and your voice never leaves this device. Needs ~450 MB of memory while you play.</p>
+        </div>
+      </div>
+      {busy ? (
+        <div className={s.dlProg}>
+          <div className={s.bar}><span style={{ transform: `scaleX(${st.progress.toFixed(3)})` }} /></div>
+          <span className={s.dlPct}>{st.progress >= 0.95 ? 'Checking it runs on this device…' : `Downloading ${Math.round(st.progress * 100)} % · ${Math.round(st.bytes / 1e6)} of 136 MB`}</span>
+        </div>
+      ) : null}
+      {st.state === 'error' ? <p className={s.err}>Download failed: {st.message}. Check the connection and try again.</p> : null}
+      <div className={s.dlBtns}>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy} testId="stt-download-cancel">{busy ? 'Keep using the server meanwhile' : 'Not now'}</Button>
+        <Button variant="accent" size="sm" iconLeft={<Icon name="arrow-down" size={14} />} disabled={busy} onClick={() => void downloadModel('stt')} testId="stt-download-go">{busy ? 'Downloading…' : st.state === 'error' ? 'Try again' : 'Download 136 MB'}</Button>
+      </div>
+    </div>
+  )
+}
 const engineOptions = (): MenuOption<VoiceEngine>[] => [
   ...(nativeSpeechAvailable() ? [{ value: 'native' as const, label: 'Phone', description: 'The OpenATC app transcribes on this phone; audio never leaves it' }] : []),
-  { value: 'server', label: 'Server (tuned for ATC)', description: 'SkyControl ATC-ASR 110M, our model fine-tuned on ATC speech, on this game\'s server, with the callsigns on frequency. The most accurate; text ~0.3 s after you let go. Audio not stored' },
-  { value: 'local', label: 'On this device', description: 'Moonshine in your browser: audio never leaves this device. Download it under AI models' },
+  { value: 'server', label: 'ATC-ASR · Server', description: 'Our model, fine-tuned on ATC speech, on this game\'s server with the callsigns on frequency as hints. Text ~0.3 s after you let go; audio not stored' },
+  { value: 'local', label: 'ATC-ASR · This device', description: 'The same model downloaded to this device (136 MB, once): works offline and your voice never leaves it. Manage it under AI models' },
   { value: 'browser', label: 'Browser (Google)', description: 'The built-in recogniser (Chrome sends audio to Google); often mishears aviation words' },
 ]
 function VoiceInput() {
@@ -139,12 +223,20 @@ function VoiceInput() {
   const [badges, setBadges] = usePersistedState<boolean>(LS.hotkeyBadges, true)
   React.useEffect(() => { document.documentElement.setAttribute('data-hotkey-badges', badges ? 'on' : 'off') }, [badges])
   const opts = engineOptions()
+  // "This device" needs the model first: offer the download, switch only once it is on this device
+  const models = useModels()
+  const [offer, setOffer] = React.useState(false)
+  const pickEngine = (v: VoiceEngine) => { if (v === 'local' && models.states.stt.state !== 'ready') { setOffer(true); return } setOffer(false); setVoiceEngine(v) }
   return (
     <>
       <Group title="Voice" hint="Hold the talk key and speak like on the radio">
-        <ListRow flush title="Speech recognition" subtitle={opts.find((o) => o.value === engine)?.description ?? ''} trailing={<Select size="m" ariaLabel="Voice recognition" options={opts} value={engine} onChange={(v) => setVoiceEngine(v)} className={s.select} testId="set-voice-engine" />} />
+        <ListRow flush title="Talk key" subtitle="Hold it and speak. Any key, a chord, or a mouse side button (all shortcuts under Keys)" trailing={<KeyCapture id="ptt" />} />
+        <ListRow flush title="Speech recognition" subtitle={opts.find((o) => o.value === engine)?.description ?? ''} trailing={<Select size="m" ariaLabel="Voice recognition" options={opts} value={offer ? 'local' : engine} onChange={pickEngine} className={s.select} testId="set-voice-engine" />} />
+        {offer ? <SttDownload onDone={() => { setOffer(false); setVoiceEngine('local') }} onCancel={() => setOffer(false)} /> : null}
         {engine === 'browser' && <ListRow flush title="Accent" subtitle="The browser recogniser has a model per accent: pick yours" trailing={<Select size="m" ariaLabel="Voice accent" options={VOICE_ACCENTS} value={accent} onChange={setAccent} className={s.select} testId="set-voice-accent" />} />}
       </Group>
+      <AudioDevices />
+      <VoiceTest />
       <Group title="Commands">
         <ListRow flush title="Typed commands transmit on Enter" subtitle="Off shows the parsed command for review first" trailing={<Mirror on={st.typedInstant}><Toggle checked={st.typedInstant} onChange={(v) => set({ typedInstant: v })} testId="set-typed-instant" /></Mirror>} />
         <ListRow flush title="Instant vectors" subtitle="Drag-to-heading on the map transmits without a confirm step" trailing={<Mirror on={st.instantVectors}><Toggle checked={st.instantVectors} onChange={(v) => set({ instantVectors: v })} testId="set-instant-vectors" /></Mirror>} />
@@ -155,6 +247,17 @@ function VoiceInput() {
 }
 
 // ── audio ──
+/** The airfield's share of the sound: aircraft, the apron, the place. */
+function WorldVolume({ disabled }: { disabled: boolean }) {
+  const [v, setV] = React.useState(() => Math.round(worldSound.volume * 100))
+  return (
+    <Group title="The airport">
+      <ListRow flush title="Aircraft and airport" subtitle="Engines, take-offs, touchdowns, reverse thrust, the field at night" meta={<span data-testid="set-world-volume-value">{v} %</span>} trailing={
+        <input type="range" min={0} max={100} step={5} value={v} disabled={disabled} aria-label="Aircraft and airport volume" className={s.range} style={{ ['--v' as string]: `${v}%` }} onChange={(e) => { const x = Number(e.target.value); setV(x); worldSound.setVolume(x / 100) }} data-testid="set-world-volume" />
+      } />
+    </Group>
+  )
+}
 function Audio() {
   const st = useSettings()
   const { pilot } = useVoicePrefs()
@@ -167,7 +270,10 @@ function Audio() {
           <input type="range" min={0} max={100} step={5} value={v} disabled={!st.sound} aria-label="Master volume" className={s.range} style={{ ['--v' as string]: `${v}%` }} onChange={(e) => set({ volume: Number(e.target.value) / 100 })} data-testid="set-volume" />
         } />
       </Group>
+      <WorldVolume disabled={!st.sound} />
       <Group title="Pilots on the radio">
+        <ListRow flush title="Hear ground in Tower" subtitle="Off: in Tower you hear only the tower frequency and the answers to your own calls" trailing={<Toggle checked={st.hearGround} onChange={(x) => set({ hearGround: x })} testId="set-hear-ground" />} />
+        <ListRow flush title="Busy radio" subtitle="Crews sometimes talk over each other, and callsigns can sound alike" trailing={<Toggle checked={st.radioRealism} onChange={(x) => set({ radioRealism: x })} testId="set-radio-realism" />} />
         <ListRow flush title="Pilot voice" subtitle="Spoken readbacks and requests" trailing={<Mirror on={st.tts}><Toggle checked={st.tts} onChange={(x) => set({ tts: x })} testId="set-tts" /></Mirror>} />
         <ListRow flush title="Voices" subtitle={pilot === 'neural' ? 'Neural: four pilot voices made on this device (Paradee-8M, ~8 MB, see AI models)' : 'Browser: the built-in speech voice, the same for every pilot'} trailing={
           <Segmented small ariaLabel="Pilot voices" items={[{ id: 'neural', label: 'Neural' }, { id: 'browser', label: 'Browser' }]} value={pilot} onChange={(x) => setPilotVoice(x as 'neural' | 'browser')} testId="set-pilot-voices" />
@@ -180,7 +286,7 @@ function Audio() {
 // ── graphics ──
 function Graphics({ inGame, onLeave }: { inGame: boolean; onLeave?: () => void }) {
   const st = useSettings(); const prefs = usePrefs()
-  const pref = useGraphicsPref(); const detected = useDetected(); const look = useLook()
+  const pref = useGraphicsPref(); const detected = useDetected(); const mapEngine = useMapEngine()
   const tier = pref === 'auto' ? detected?.tier ?? null : pref
   const p = tier ? PRESETS[tier] : null
   const what = p ? `${p.bokeh ? 'Depth of field' : 'No depth of field'} · ${p.fxaa ? 'FXAA' : 'no AA'} · up to ${p.dprMax}× render scale · models within ${(p.modelDist / 1000).toFixed(1)} km${p.fpsCap ? ` · ${p.fpsCap} fps` : ''}` : 'Detected once the map is up'
@@ -193,9 +299,9 @@ function Graphics({ inGame, onLeave }: { inGame: boolean; onLeave?: () => void }
             {(['auto', 'ultra', 'high', 'medium', 'low'] as const).map((k) => <Pill key={k} size="s" tone="outline" interactive selected={pref === k} aria-pressed={pref === k} onClick={() => setGraphicsPref(k)} testId={`gfx-${k}`}>{label(k)}</Pill>)}
           </span>
         } />
-        <ListRow flush title="Look" subtitle={look === 'cinematic' ? 'Cinematic: glow on the sun and the lights, a film colour grade, vignette and grain' : 'Standard: clean and true to life'} trailing={
-          <span className={s.pills} role="group" aria-label="Map look">
-            {(['standard', 'cinematic'] as const).map((k) => <Pill key={k} size="s" tone="outline" interactive selected={look === k} aria-pressed={look === k} onClick={() => setLook(k)} testId={`look-${k}`}>{k === 'standard' ? 'Standard' : 'Cinematic'}</Pill>)}
+        <ListRow flush title="Map" subtitle={mapboxAvailable() ? (mapEngine === 'mapbox' ? 'Mapbox: real 3D buildings and lighting, the game on top' : 'Classic: the game\'s own 3D airport, weather and cinematic look') : 'Classic (Mapbox is not set up on this server)'} trailing={
+          <span className={s.pills} role="group" aria-label="Map">
+            {(['mapbox', 'classic'] as const).map((k) => <Pill key={k} size="s" tone="outline" interactive disabled={k === 'mapbox' && !mapboxAvailable()} selected={mapEngine === k} aria-pressed={mapEngine === k} onClick={() => setMapEngine(k)} testId={`map-${k}`}>{k === 'classic' ? 'Classic' : 'Mapbox'}</Pill>)}
           </span>
         } />
         {detected ? <ListRow flush title="This device" subtitle={`${detected.device.gpu || 'GPU unknown'} · ${detected.device.cores} cores${detected.device.memoryGB ? ` · ${detected.device.memoryGB} GB` : ''}${detected.device.coarse ? ' · touch' : ''}`} meta={<span data-testid="gfx-detected" data-tier={detected.tier}>{detected.tier}</span>} /> : null}
@@ -237,7 +343,7 @@ function Llm() {
   }
   const exportLog = () => {
     const blob = new Blob([sim.llmAgent.exportJsonl()], { type: 'application/jsonl' })
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `skycontrol-io-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jsonl`
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `openatc-io-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jsonl`
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000)
   }
   const statusText = status.lastError ? `Error: ${status.lastError}` : status.calls ? `${status.calls} call${status.calls === 1 ? '' : 's'} · last ${status.lastMs ?? '–'} ms ${ago(status.lastAt)}${status.model ? ` · ${status.model}` : ''}` : llm.mode === 'off' ? 'Off' : 'Waiting for the first call…'
@@ -317,7 +423,8 @@ const CREDITS: { title: string; subtitle: string; href?: string; icon: IconName 
   { title: 'Esri World Imagery', subtitle: 'Satellite backdrops · Esri, Maxar, Earthstar Geographics', href: 'https://www.esri.com/en-us/legal/terms/data-attributions', icon: 'layers' },
   { title: 'Endless ATC airport format', subtitle: 'Airspace, beacons, ILS and entry-point definitions', icon: 'radio-tower' },
   { title: 'MapLibre GL JS', subtitle: 'Ground map renderer · BSD-3', href: 'https://maplibre.org', icon: 'map-pin' },
-  { title: 'SkyControl ATC-ASR 110M', subtitle: 'Our speech model, fine-tuned from NVIDIA Parakeet TDT 110M (CC-BY-4.0) · CC BY-NC-SA 4.0', icon: 'radio' },
+  { title: 'FlightGear AI aircraft', subtitle: 'Aircraft models and airline liveries · GNU GPL v2 · authors and source in the notice', href: '/models/fleet/NOTICE.txt', icon: 'plane' },
+  { title: 'ATC-ASR 110M', subtitle: 'Our speech model, fine-tuned from NVIDIA Parakeet TDT 110M (CC-BY-4.0) · CC BY-NC-SA 4.0', icon: 'radio' },
   { title: 'Moonshine, Parakeet, Paradee', subtitle: 'Speech models · MIT / CC-BY-4.0 / Apache-2.0', icon: 'radio' },
   { title: 'DM Sans', subtitle: 'Colophon Foundry · SIL Open Font License', href: 'https://fonts.google.com/specimen/DM+Sans', icon: 'info' },
   { title: 'Lucide', subtitle: 'Line icons · ISC', href: 'https://lucide.dev', icon: 'sparkles' },
@@ -327,7 +434,7 @@ function About() {
   const version = React.useContext(VersionContext)
   return (
     <>
-      <Group title="SKYCONTROL">
+      <Group title="OpenATC">
         <ListRow flush title="Ground, tower and approach simulation" subtitle="Real airports, real phraseology, your voice" meta={<span data-testid="set-version">v{version}</span>} />
       </Group>
       <Group title="Something wrong?">

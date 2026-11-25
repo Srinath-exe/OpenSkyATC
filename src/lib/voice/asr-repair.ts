@@ -208,7 +208,7 @@ export function normaliseTokens(raw: string): string[] {
   for (let i = 0; i < out.length - 1; i++) {
     if (/^[a-z]$/.test(out[i]) && /^[a-z]$/.test(out[i + 1]) && out[i] !== 'a') {
       let j = i; let w = ''; while (j < out.length && /^[a-z]$/.test(out[j])) w += out[j++];
-      if (w.length >= 2 && w.length <= 3) out.splice(i, j - i, w);
+      if (w.length >= 2 && w.length <= 3 && !/^(?:er|um|uh|ah|hm)$/.test(w)) out.splice(i, j - i, w);      // ("E, R" are two taxiways, not a hesitation)
     }
   }
   return out;

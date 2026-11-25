@@ -48,7 +48,6 @@
   letter-spacing: 0.14em;
   font-size: 13px;
 }
-.logo { width: 22px; height: 22px; fill: none; stroke: var(--radar); stroke-width: 1.4; }
 .navMid { display: flex; align-items: center; gap: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--ink-3); text-transform: uppercase; }
 .live { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--radar); box-shadow: 0 0 10px var(--radar); animation: blink 1.6s ease-in-out infinite; }

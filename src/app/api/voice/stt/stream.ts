@@ -53,12 +53,35 @@ export class SttStream {
   readonly errors: string[] = [];
   ended = false;
 
-  constructor(private names: string[], private transcribe: Transcribe) {}
+  /** `live`: also keep a running reading of the phrase being spoken (live()), at the cost of extra decodes. */
+  constructor(private names: string[], private transcribe: Transcribe, private liveTranscribe: Transcribe | null = null) {}
 
   get seconds(): number { return this.n / RATE; }
 
-  /** Text of the phrases finished so far (for the live display). */
+  /** Text of the phrases finished so far (the final join). */
   partial(): string { return this.segs.filter((s) => s.text).map((s) => s.text).join(' ').trim(); }
+  /** For the live display, word by word: the phrases finished so far plus a running reading of the one being spoken
+   *  (decoded again about every 0.7 s, one decode at a time; a phrase still decoding shows its last running reading). */
+  live(): string {
+    const parts = this.segs.map((s) => s.text ?? (s.start === this.liveFor ? this.liveText : '')).filter(Boolean)
+    if (this.liveFor === this.cut && this.liveText) parts.push(this.liveText)
+    return parts.join(' ').trim()
+  }
+  private liveText = ''
+  private liveFor = -1
+  private liveBusy = false
+  private liveAt = 0
+  private liveTick(): void {
+    if (!this.liveTranscribe || this.ended || this.liveBusy || Date.now() - this.liveAt < 700) return
+    const from = this.cut, to = this.n
+    if (to - from < 0.6 * RATE || this.speechRun < 300) return
+    this.liveBusy = true; this.liveAt = Date.now()
+    const audio = new Float32Array(to - from); for (let i = from; i < to; i++) audio[i - from] = this.sample(i)
+    this.liveTranscribe(audio, this.names)
+      .then((r) => { const t = r.text.trim().replace(/[.?!]+$/, ''); if (t) { this.liveText = t; this.liveFor = from } })
+      .catch(() => undefined)
+      .finally(() => { this.liveBusy = false })
+  }
 
   push(pcm: Float32Array): void {
     this.lastSeen = Date.now();
@@ -68,6 +91,7 @@ export class SttStream {
     const add = pcm.length > room ? pcm.subarray(0, room) : pcm;
     this.bufs.push(add); this.n += add.length;
     this.scan();
+    this.liveTick();
   }
 
   /** The button was let go: decode what is left, wait for every phrase, join. */

@@ -52,7 +52,7 @@ export type StepperSpeedTarget = number | 'final' | 'resume';
 
 /** Named hotkeys the shell dispatcher understands (src/game/hotkeys.ts). */
 export type ShellHotkey =
-  | 'F1' | 'F2' | 'F3' | 'F4' | 'F8' | 'F9' | 'F10' | 'Space' | 'Escape' | 'Enter' | 'Tab' | 'Shift+Tab'
+  | 'F1' | 'F2' | 'F3' | 'F4' | 'F8' | 'F9' | 'F10' | 'Space' | 'P' | 'Escape' | 'Enter' | 'Tab' | 'Shift+Tab'
   | '1' | '2' | '4' | ',' | '.' | '[' | ']' | '/' | '?' | 'U' | 'Control+k' | 'Control+z' | 'Alt+f' | 'Shift+r'
   | (string & {});
 
@@ -168,6 +168,11 @@ export class GamePage {
   pauseMenu = () => this.page.getByTestId('pause-menu');
   helpOverlay = () => this.page.getByTestId('help-overlay');
   settingsModal = () => this.page.getByTestId('settings-modal');
+  /** Settings is split into tabs (Gameplay, Traffic, Voice, Keys, Audio, Graphics, AI models): open one. */
+  async settingsTab(id: 'gameplay' | 'traffic' | 'voice' | 'keys' | 'audio' | 'graphics' | 'models'): Promise<void> {
+    await this.page.getByTestId(`settab-${id}`).click();
+    await expect(this.page.getByTestId(`settab-${id}`)).toHaveAttribute('aria-selected', 'true');
+  }
   mapTooltip = () => this.page.getByTestId('map-tooltip');
   /** The top nav (`data-escalated` = an unacked critical alert older than 10 s). */
   topBar = () => this.page.locator('nav[aria-label="Top bar"]');
@@ -718,7 +723,7 @@ export class GamePage {
   /** Press a shell hotkey with focus on the map region (so inputs / pickers do not swallow it). */
   async hotkey(key: ShellHotkey): Promise<void> {
     await this.page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur?.(); });
-    await this.page.keyboard.press(key === '?' ? 'Shift+/' : key);
+    await this.page.keyboard.press(key === '?' ? 'Shift+/' : key === 'P' ? 'p' : key);
   }
 
   // ── canvas hit-testing (05 §3.2) ─────────────────────────────────────────

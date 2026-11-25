@@ -230,7 +230,9 @@ test.describe('approach: vectors, altitude, speed', () => {
     expect(v.altitude).toBeGreaterThan(9500);                          // > 1500 fpm with expedite
     await expect(game.stripAlt('UAL9')).toHaveAttribute('data-value', String(Math.round(v.altitude)));
 
-    // descend below the transition altitude: plain feet, expedite off by default
+    // descend below the transition altitude: plain feet, expedite off by default (past the 90 s in which the pilot
+    // would question a climb turned into a descent - spec 13 ledger R1)
+    await sim.advance(35);
     await game.action('action-altitude');
     await game.ladderAlt(4000);
     await expect(game.page.getByTestId('picker-alt-expedite')).toHaveAttribute('aria-checked', 'false');

@@ -17,9 +17,10 @@
 //  two-tone), emergency 3-beep + two-note siren, resolve chime, error buzz,
 //  undo rewind, score up / down, pause / resume.
 // ============================================================
+import { applySink } from '@/lib/audioDevices';
 import type { AlertSeverity } from '../../lib/sim/types';
 import type { PhraseVariant } from '../../lib/sim/phraseology';
-import { NeuralPilotVoice } from './pilotVoice';
+import { NeuralPilotVoice, radioBusy, whenRadioFree } from './pilotVoice';
 import type { NeuralLineStat, NeuralState } from './pilotVoice';
 import { LS, readJson } from '../../game/persist';
 
@@ -28,7 +29,7 @@ export type PilotVoicePref = 'neural' | 'browser';
 export function pilotVoicePref(): PilotVoicePref { return readJson<PilotVoicePref>(LS.pilotVoice, 'neural') === 'browser' ? 'browser' : 'neural'; }
 
 export type SoundCue =
-  | 'transmit' | 'readback' | 'request' | 'handoff' | 'resolve' | 'error' | 'undo'
+  | 'blocked' | 'transmit' | 'readback' | 'request' | 'handoff' | 'resolve' | 'error' | 'undo'
   | 'alert-info' | 'alert-warning' | 'alert-critical' | 'emergency'
   | 'score-up' | 'score-down' | 'pause' | 'resume' | 'select' | 'tick';
 
@@ -94,6 +95,11 @@ class SoundEngine {
     else this.unlocked = true;
   }
 
+  /** The engine's context and output, for the file-based sounds (worldSound.ts); null before audio is possible. */
+  output(): { ctx: AudioContext; out: GainNode } | null { const ctx = this.context(); return ctx && this.master ? { ctx, out: this.master } : null; }
+  /** Files first: a cue plays its recording when there is one loaded (worldSound.ts sets this). */
+  file: ((cue: string) => boolean) | null = null;
+
   /** Whether audio can actually be heard right now (context running). */
   get ready(): boolean { return !!this.ctx && this.ctx.state === 'running'; }
 
@@ -107,8 +113,10 @@ class SoundEngine {
     const last = this.lastPlayed.get(cue) ?? -Infinity;
     if (now - last < minGap) return;
     this.lastPlayed.set(cue, now);
+    if (this.file?.(cue)) return;
     const t = ctx.currentTime;
     switch (cue) {
+      case 'blocked':    this.noise(0.7, 0.07, t); this.tone(940, 0.7, { type: 'sawtooth', gain: 0.05, at: t, to: 1180 }); this.tone(1310, 0.7, { type: 'sawtooth', gain: 0.035, at: t, to: 1020 }); break;
       case 'transmit':   this.noise(0.03, 0.10, t); this.tone(1800, 0.02, { type: 'square', gain: 0.05, at: t }); break;
       case 'readback':   this.tone(660, 0.09, { at: t, gain: UI_GAIN }); this.tone(830, 0.11, { at: t + 0.09, gain: UI_GAIN }); break;
       case 'request':    this.tone(1046, 0.14, { at: t, gain: UI_GAIN, release: 0.12 }); break;
@@ -169,6 +177,9 @@ class SoundEngine {
     this.neural.prefetch(text, opts.callsign, opts.variant);
   }
 
+  /** A pilot is talking, or a line is queued to (the tutorial's narrator waits for this to clear). */
+  get radioBusy(): boolean { return this.neural.busy || this.neuralPending.length > 0 || this.speechQueued > 0; }
+
   /** The neural voice's state ('idle' until the first pilot line) and its last line timings (tests, diagnostics). */
   get neuralState(): NeuralState { return this.neural.state; }
   neuralStats(): NeuralLineStat[] { return this.neural.stats.slice(); }
@@ -180,6 +191,7 @@ class SoundEngine {
   /** speechSynthesis: one robotic voice, cancelled when more than four lines stack. */
   private speakBrowser(text: string, who?: 'PILOT' | 'ATC' | 'SYS' | 'AI'): void {
     if (!this.browserVoice()) return;
+    if (who !== 'ATC' && radioBusy()) { whenRadioFree(() => this.speakBrowser(text, who)); return; }   // the player is transmitting
     const synth = window.speechSynthesis; if (!synth) return;
     const clean = text.replace(/\b[A-Z]{4,}\b/g, w => w.toLowerCase()).replace(/\s+/g, ' ').trim();
     if (!clean) return;
@@ -211,7 +223,7 @@ class SoundEngine {
     const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctor) return null;
     try {
-      const ctx = new Ctor();
+      const ctx = new Ctor(); applySink(ctx);   // the output chosen in Settings > Voice & input
       const master = ctx.createGain();
       master.gain.value = this.volume;
       master.connect(ctx.destination);

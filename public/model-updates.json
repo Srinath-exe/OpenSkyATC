@@ -1,0 +1,84 @@
+{
+ "schema": 1,
+ "models": {
+  "s1": {
+   "version": "2m-free-v5",
+   "aliases": [],
+   "title": "Command model",
+   "what": "Understands what you mean",
+   "notes": [
+    "Understands more ways of saying a command",
+    "Fewer wrong commands"
+   ],
+   "dir": "/models/s1/2m-free-v5",
+   "bytes": 2088035,
+   "files": [
+    {
+     "name": "model.json",
+     "size": 16728,
+     "sha256": "e6f7da29c22f2ae12fe7c86ed2d12ef23277a3170fb980d353d94686aeea1b15"
+    },
+    {
+     "name": "model.bin",
+     "size": 2069076,
+     "sha256": "5a9916f9554190ae9ac17fdaf94ca9065cdff5fb2c008fcb071cfb97b05147f3"
+    },
+    {
+     "name": "gate.json",
+     "size": 2231,
+     "sha256": "1760be2725bf53823d05bab3f0b8fd9d1be4cb084c80c39cc7a1f570fa1b8862"
+    }
+   ]
+  },
+  "stt": {
+   "version": "2026-11-11",
+   "aliases": [
+    "v1"
+   ],
+   "title": "Speech model",
+   "what": "Hears your voice",
+   "notes": [
+    "Trained on air traffic control radio"
+   ],
+   "dir": "/models/stt/parakeet-110m-atc-v1",
+   "bytes": 136490214,
+   "files": [
+    {
+     "name": "encoder.int8.onnx",
+     "role": "encoder",
+     "size": 131112998,
+     "sha256": "8bb2341a4b42383f1d0ca9cb3f736da5cff6be35b71f1a2c37e365ea9a8329ab"
+    },
+    {
+     "name": "decoder.int8.onnx",
+     "role": "decoder",
+     "size": 3955863,
+     "sha256": "7b2efacf70318c51e0024a6a229a63d5b901ee6c8643794d158109122d10ae9e"
+    },
+    {
+     "name": "joiner.int8.onnx",
+     "role": "joiner",
+     "size": 1411400,
+     "sha256": "fce43322868e78bbebb1db0ebbe6617e0dbdc907bcba4af357edf0a625ee12d6"
+    },
+    {
+     "name": "tokens.txt",
+     "role": "tokens",
+     "size": 9953,
+     "sha256": "450e56bd2f036fe5b6aa821865838cc5aa9d8b0106134ce9a9ba0664abe6cd10"
+    }
+   ],
+   "phone": {
+    "id": "parakeet-110m-atc-v1",
+    "name": "Parakeet TDT 110M, fine-tuned for ATC",
+    "kind": "nemoTransducer",
+    "sampleRate": 16000,
+    "hotwords": false,
+    "modelType": "",
+    "license": "CC-BY-NC-SA-4.0 (training data includes UWB-ATCC and ATCOSIM)",
+    "source": "ml/stt/train_parakeet.py",
+    "notes": "offline NeMo transducer, greedy; fine-tuned on 133 h of ATC speech (ml/gpu/remote/stt_edge.sh); owner recordings 0.6 % WER, coverage test 0.8 %; files hosted at openatc.aeon-labs.site/models/stt/parakeet-110m-atc-v1"
+   }
+  }
+ }
+}

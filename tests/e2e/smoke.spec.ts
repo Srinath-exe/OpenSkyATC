@@ -11,18 +11,22 @@
 import { test, expect } from './fixtures/test';
 
 test.describe('smoke', () => {
-  test('home -> EGLL -> START boots /play in test mode with the home config @smoke', async ({ home, game, sim }) => {
+  test('start -> KSFO -> START boots /play in test mode with the start config @smoke', async ({ home, game, sim }) => {
+    // launch scope is SFO: the start screen goes straight to its shift board (no airport picker)
     await home.goto({ testMode: { seed: 7, spawn: 'default' } });
-    await expect(home.airportCards()).toHaveCount(12);
-    await home.pickAirport('EGLL');
-    await expect(home.detailTitle()).toContainText('Heathrow');
+    await expect(home.detail()).toHaveAttribute('data-icao', 'KSFO');
 
-    // westerlies only: 09L / 09R off, keep 27L / 27R
-    await home.toggleEnd('09L', false);
-    await home.toggleEnd('09R', false);
-    expect((await home.activeEnds()).sort()).toEqual(['27L', '27R']);
-    await home.toggleWeight('27R', 'S', false);
-    await expect(home.startHint()).toContainText('EGLL');
+    // west flow only: 28L / 28R on, every other end off (the runway chips on the board)
+    const chip = (end: string) => home.page.getByTestId(`board-end-${end}`);
+    for (const end of ['10L', '10R', '01L', '01R', '19L', '19R', '28L', '28R']) {
+      const want = end.startsWith('28');
+      if (((await chip(end).getAttribute('aria-pressed')) === 'true') !== want) await chip(end).click();
+      await expect(chip(end)).toHaveAttribute('aria-pressed', want ? 'true' : 'false');
+    }
+    // no supers on 28R (the wake categories sit in the collapsed "Wake categories and seed" section)
+    await home.page.getByText('Wake categories and seed').click();
+    await home.toggleWeight('28R', 'S', false);
+    await expect(home.startHint()).toContainText(/28R 28L|28L 28R/);   // the summary on the Start button: seat · runways · traffic
 
     await home.start();
     await game.waitReady();
@@ -33,21 +37,19 @@ test.describe('smoke', () => {
     await game.page.waitForTimeout(400);
     expect(await sim.time()).toBe(t0);
 
-    // the home config reached the engine
+    // the start config reached the engine
     const rws = await sim.runways();
     const active = rws.filter((r) => r.active).map((r) => r.name).sort();
-    expect(active).toEqual(['27L', '27R']);
-    expect(rws.find((r) => r.name === '27R')?.weights).toEqual(['L', 'M', 'H']);
-    await expect(game.airportBadge()).toHaveText('EGLL');
+    expect(active).toEqual(['28L', '28R']);
+    expect(rws.find((r) => r.name === '28R')?.weights).toEqual(['L', 'M', 'H']);
 
-    // one-shot config consumed; default spawn seeded 4 departures + 3 arrivals
+    // one-shot config consumed; the default spawn seeded departures and arrivals
     expect(await game.page.evaluate(() => localStorage.getItem('skycontrol_start_config'))).toBeNull();
     const snap = await sim.snapshot();
-    expect(snap.icao).toBe('EGLL');
-    expect(snap.stats.total).toBe(7);
-    expect(snap.stats.dep).toBe(4);
-    expect(snap.stats.arr).toBe(3);
-    await expect(game.radioLines('SYS').first()).toContainText(/test mode · seed 7/);
+    expect(snap.icao).toBe('KSFO');
+    expect(snap.stats.total).toBeGreaterThan(0);
+    expect(snap.stats.dep + snap.stats.arr).toBe(snap.stats.total);
+    expect((await sim.radio()).find((l) => l.who === 'SYS')?.text).toMatch(/test mode · seed 7/);   // (the store's log: the board layout has no SYS rows)
   });
 
   test('three positions render: ground map, tower map, approach radar @smoke', async ({ openGame, sim }) => {

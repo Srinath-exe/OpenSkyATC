@@ -1,5 +1,5 @@
 // ============================================================
-//  Ground map style (MapLibre) — SKYCONTROL design 01 §5 / A10 / A21.
+//  Ground map style (MapLibre) — OpenATC design 01 §5 / A10 / A21.
 //
 //  Two themes over the same OSM aeroway GeoJSON:
 //    • satellite — the pre-baked static image (no tile refetch) pulled toward a

@@ -1,14 +1,11 @@
-/* A11.2 modal: scrim .72 + blur 6; panel --bg-1 radius 24 padding 24 width 440; A5 bottom sheet */
-.scrim { position: fixed; inset: 0; z-index: var(--z-modal); background: var(--scrim); -webkit-backdrop-filter: blur(var(--scrim-blur)); backdrop-filter: blur(var(--scrim-blur)); display: flex; align-items: center; justify-content: center; padding: 16px; animation: global(ds-fade-in) var(--t-base) var(--ease-out) both; }
+/* Modal: a solid board like the game's flight board, card and pause menu (no glass, no blur); A5 bottom sheet */
+.scrim { position: fixed; inset: 0; z-index: var(--z-modal); background: rgba(4,6,9,0.62); display: flex; align-items: center; justify-content: center; padding: 16px; animation: global(ds-fade-in) var(--t-base) var(--ease-out) both; }
 .scrimLeaving { animation: global(ds-fade-out) var(--t-base) var(--ease-out) both; }
 .panel {
   position: relative; width: var(--modal-w); max-width: 100%; max-height: calc(100vh - 32px); overflow: auto;
-  background: var(--glass-spec), var(--glass-sheen), var(--glass-fill-strong); border: var(--bw) solid var(--glass-border); border-radius: var(--r-card-lg); padding: var(--card-pad-lg);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate)); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  box-shadow: var(--glass-rim), var(--shadow-modal); color: var(--text-1); animation: global(ds-pop) var(--t-base) var(--ease-out) both; outline: none;
+  background: #0c0f13; border: 1px solid rgba(255,255,255,0.09); border-radius: 16px; padding: var(--card-pad-lg);
+  box-shadow: 0 24px 60px -18px rgba(0,0,0,0.8); color: var(--text-1); animation: global(ds-pop) var(--t-base) var(--ease-out) both; outline: none;
 }
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { .panel { background: var(--glass-fill-fallback); } }
-:global(html[data-lens="1"]) .panel { -webkit-backdrop-filter: url(#lg-lens) saturate(var(--glass-saturate)); backdrop-filter: url(#lg-lens) saturate(var(--glass-saturate)); }
 .panelLeaving { animation: global(ds-fade-out) var(--t-base) var(--ease-out) both; }
 .wide { width: 640px; }
 .xl { width: 1040px; height: min(760px, calc(100vh - 32px)); display: flex; flex-direction: column; overflow: hidden; padding: var(--s-5) 0 var(--s-4); }
@@ -24,7 +21,7 @@
 .footerLeft { margin-right: auto; }
 @media (max-width: 767px) {
   .scrim { align-items: flex-end; padding: 0; }
-  .panel { width: 100%; border-radius: var(--r-card-lg) var(--r-card-lg) 0 0; max-height: 92vh; animation: ds-sheet-in var(--t-slow) var(--ease-out) both; }
+  .panel { width: 100%; border-radius: 16px 16px 0 0; max-height: 92vh; animation: ds-sheet-in var(--t-slow) var(--ease-out) both; }
 }
 /* Sheet */
 .sheetScrim { position: fixed; inset: 0; z-index: var(--z-sheet); background: var(--scrim); animation: global(ds-fade-in) var(--t-base) var(--ease-out) both; }

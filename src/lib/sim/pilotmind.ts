@@ -9,6 +9,7 @@
 // Everything here is deterministic and read from the simulator's state (the ledger for what was said, the runway
 // occupants and positions for what can be seen). It never changes the state: it only asks (through the same
 // question-and-confirm flow as the ledger) or raises a pilot call the controller can answer.
+import { remembersNames } from './naming';
 import type { SimEngine } from './engine';
 import type { AircraftState, PilotRequest, RunwayState } from './types';
 import type { SingleAircraftCommand } from './commandAst';
@@ -262,6 +263,7 @@ const now = (e: SimEngine) => e.time;
 
 // one mind per engine, without touching the engine class
 const MINDS = new WeakMap<object, PilotMind>();
+remembersNames(e => MINDS.get(e));
 export function mindOf(engine: object): PilotMind {
   let m = MINDS.get(engine);
   if (!m) { m = new PilotMind(); MINDS.set(engine, m); }

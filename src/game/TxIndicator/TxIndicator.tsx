@@ -7,14 +7,13 @@ import { useShellOptional } from '../shellContext'
 
 const LIT_MS = 1200
 
-/** `data-state="tx|idle"` while transmitting / PTT; `aria-pressed` mirrors the ATC voice (TTS) toggle. */
-export function TxIndicator() {
+/** Lit for a moment after each ATC transmission, and while the talk key is held. */
+export function useTxLit(): boolean {
   const shell = useShellOptional()
   const lastAtcKey = useSim((s) => {
     for (let i = s.radio.length - 1; i >= 0; i--) if (s.radio[i].who === 'ATC') return s.radio[i].key
     return -1
   })
-  const tts = useSim((s) => s.tts)
   const [lit, setLit] = React.useState(false)
   const first = React.useRef(true)
   React.useEffect(() => {
@@ -24,7 +23,13 @@ export function TxIndicator() {
     const t = setTimeout(() => setLit(false), LIT_MS)
     return () => clearTimeout(t)
   }, [lastAtcKey])
-  const on = lit || !!shell?.ptt
+  return lit || !!shell?.ptt
+}
+
+/** `data-state="tx|idle"` while transmitting / PTT; `aria-pressed` mirrors the ATC voice (TTS) toggle. */
+export function TxIndicator() {
+  const tts = useSim((s) => s.tts)
+  const on = useTxLit()
   return (
     <Tooltip content={tts ? 'ATC voice on' : 'ATC voice off'} placement="bottom">
       <button

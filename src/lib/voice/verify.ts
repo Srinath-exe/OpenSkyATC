@@ -201,6 +201,9 @@ export interface RoundTrip {
 
 const csScore = (m: { num: number; name: number }) => 0.6 * m.num + 0.4 * m.name;
 
+const NATO_WORD = 'alpha|alfa|bravo|charlie|delta|echo|foxtrot|golf|hotel|india|juliett?|kilo|lima|mike|november|oscar|papa|quebec|romeo|sierra|tango|uniform|victor|whiskey|xray|yankee|zulu';
+const NOT_A_SIDE = new RegExp(`\\b(?:right (?:now|away|then|there|where|behind)|(?:thats|that s|that is|all|youre|just|yeah|okay) right|alright)\\b|^right (?!turn|heading|hand|to|onto|\\d)(?=[a-z])|\\b(?:left|right) (?:on|onto|at) (?:taxiway )?(?=(?:${NATO_WORD}|[a-z]\\d?)\\b)|\\b(?:got|fuel|minutes|much|have) left\\b`, 'g');
+
 /** Align the proposed command, rendered back to words, with the transcript. */
 export function roundTrip(transcript: string, ast: CommandAST, ctx: ParseCtx, magVar = 0): RoundTrip {
   const heard = heardTokens(transcript);
@@ -211,6 +214,8 @@ export function roundTrip(transcript: string, ast: CommandAST, ctx: ParseCtx, ma
   const csDigits = cs.replace(/^[A-Z]+/, '').replace(/\D/g, '');
   const telWords = new Set(cs ? sttWords(AIRLINE_TELEPHONY[cs.slice(0, 3)] ?? '') : []);
   const heardSet = new Set(heard);
+  // "right now", "that's right", "left on november", "what have you got left": not a runway side or a turn
+  const sideSet = new Set(heardTokens(transcript.toLowerCase().replace(/'/g, '').replace(NOT_A_SIDE, ' ')));
   // the content of what was heard, callsign taken out ("86029 right" -> the flight number 860 + "29 right")
   let csSeen = false;
   const content: string[] = [];
@@ -264,7 +269,7 @@ export function roundTrip(transcript: string, ast: CommandAST, ctx: ParseCtx, ma
     const fset = new Set(f);
     const conflict = verbConflict || OPPOSITE.some(([x, y]) => (heardSet.has(x) && !heardSet.has(y) && fset.has(y) && !fset.has(x)) || (heardSet.has(y) && !heardSet.has(x) && fset.has(x) && !fset.has(y))) ? 1 : 0;
     // a runway side that was heard but is not in the command ("hold short of runway 24L" -> "Hold short 24")
-    const sideMiss = ['left', 'right', 'center'].filter(x => heardSet.has(x) && !fset.has(x)).length;
+    const sideMiss = ['left', 'right', 'center'].filter(x => sideSet.has(x) && !fset.has(x)).length;
     const r: RoundTrip = { csNum: mine.num, csName: mine.name, csOther: other - csScore(mine), numRecall, numExtra: extra, kwRecall, conflict, cover, seq,
       kwMiss: Math.min(words.length - wl, 3), heardMiss: Math.min(content.length - both, 4), sideMiss: Math.min(sideMiss, 2), rendered: forms.length ? 1 : 0 };
     const key = numRecall + kwRecall + cover + seq - conflict - extra;
@@ -349,19 +354,23 @@ export function vetoOf(rt: RoundTrip): string | null {
   return null;
 }
 
+/** Words that make a call a question to the crew ("have you" is not one: "let's have you down at six thousand"). */
+const QUESTION = / (?:are you able|would you be able|can you accept|could you accept|are you ready|are you clear of|did you|did i|didnt i|was that you|was it you|who told you|who gave you|who cleared you|were you|werent you|i never|why are you|why did you|reckon you can|reckon you could|do you think you can|do you think you could) /;
 /**
  * The instruction must be one that was said: a heading, altitude or speed proposal whose kind has no keyword in the
  * transcript ("increase speed 2230-230" -> "Fly heading 230") is never sent on its own. Recognisers drop or mangle the
  * digits far more often than these words, so a missing keyword means the model guessed the instruction.
  */
 const KIND_WORDS: Record<string, RegExp> = Object.assign(Object.create(null), {
-  heading: /\b(heading|hdg|turn|vector|vectors|degrees)\b/,
-  altitude: /\b(climb|climbing|descend|descent|descending|maintain|flight level|level|fl|altitude|thousand|feet|ft)\b/,
-  speed: /\b(speed|knots|knot|kts|kt|mach|faster|slower)\b/,
+  heading: /\b(heading|hdg|turn|vector|vectors|degrees|steer|swing|bank|veer|bend|roll out|come (?:round|around|left|right)|(?:go|bring (?:it|her)|hang a|make a) (?:round |around )?(?:left|right)|nose|point (?:it|her|yourself))\b/,
+  altitude: /\b(climb|climbing|descend|descent|descending|maintain|flight level|level|fl|altitude|thousand|hundred|feet|ft)\b/,
+  speed: /\b(speed|knots|knot|kts|kt|mach|faster|slower|fast|slow|slow (?:it|down)|throttle|(?:wind|dial|knock|pull|ease|bring|take|cut|back) (?:it |her )?(?:back|down|off)|accelerate)\b/,
 });
 export function kindVeto(transcript: string, ast: CommandAST): string | null {
   const parts = ast.kind === 'sequence' ? ast.parts : [ast];
   const t = ` ${transcript.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/([a-z])(\d)/g, '$1 $2').replace(/(\d)([a-z])/g, '$1 $2')} `;
+  // a question is never carried out on the model's word alone ("are you able to climb to one three thousand"): the player checks it
+  if (QUESTION.test(t) && parts.some((p) => p.kind !== 'report')) return 'it sounded like a question';
   for (const p of parts) {
     const re = KIND_WORDS[p.kind];
     if (re && !re.test(t)) return `“${p.kind}” was not heard`;
@@ -371,3 +380,23 @@ export function kindVeto(transcript: string, ast: CommandAST): string | null {
 
 export type Gate = 'send' | 'check' | 'sayAgain';
 export const gateOf = (p: number, t: VerifierModel['thresholds']): Gate => (p >= t.send ? 'send' : p >= t.sayAgain ? 'check' : 'sayAgain');
+
+/** The call stops in the middle ("climb to eight thousand and then", "start your"): nothing in it is carried out. */
+export const cutOff = (transcript: string): boolean => /\b(?:and|then|your|via|the|of|but)$/.test(transcript.toLowerCase().trim());
+
+/** Parts the rules make out of words that were not meant as an instruction of their own. */
+const ADDED = new Set(['standby', 'continue', 'disregard', 'holdPosition', 'windCheck', 'roger', 'sayAgain', 'goAround', 'exitAt', 'vacate']);
+
+/**
+ * Rules whose reading of a call needs a second opinion: a part made of stray words (ADDED), words swallowed as a
+ * "reason" ("stop asking for six thousand" -> hold position), heard numbers the command does not use ("wind it back to two
+ * eight zero knots" -> wind check), or much of what was said left unexplained.
+ */
+export function shaky(transcript: string, ast: CommandAST, ctx: ParseCtx, magVar = 0): boolean {
+  if (ast.kind === 'report') return false;                                       // a question: harmless
+  if (ast.kind === 'sequence' && ast.parts.some((p) => ADDED.has(p.kind))) return true;   // "... and hang on there" -> / Standby
+  const reason = (ast as { reason?: unknown }).reason;
+  if (typeof reason === 'string' && reason.trim().split(/\s+/).filter(Boolean).length >= 2) return true;
+  const rt = roundTrip(transcript, ast, ctx, magVar);
+  return rt.numExtra > 0.4 || (rt.heardMiss >= 4 && rt.cover < 0.4);
+}

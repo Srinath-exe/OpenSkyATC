@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fetch real airport geometry from OpenStreetMap (aeroway data) via the Overpass
-API and write clean per-airport GeoJSON for the SkyControl ground radar.
+API and write clean per-airport GeoJSON for the OpenATC ground radar.
 
 This is the SAME data source AirNav Radar / FlightRadar24 use for their airport
 diagrams. OSM taxiways are clean LineStrings that already share nodes at
@@ -64,7 +64,7 @@ out geom;
 def fetch(query):
     data = urllib.parse.urlencode({"data": query}).encode()
     req = urllib.request.Request(OVERPASS, data=data,
-                                 headers={"User-Agent": "SkyControl/1.0"})
+                                 headers={"User-Agent": "OpenATC/1.0"})
     with urllib.request.urlopen(req, timeout=90) as r:
         return json.load(r)
 

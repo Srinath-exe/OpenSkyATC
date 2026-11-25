@@ -4,7 +4,7 @@
    the work. */
 import * as React from 'react'
 import { Button, Segmented, Icon, cx } from '@/design'
-import { MODELS, downloadModel, goOnDevice, measureServer, setPilotVoice, setVoiceEngine, storageUse, useModels, useVoicePrefs, type ModelId, type ModelInfo, type ModelState } from '@/lib/models/manager'
+import { MODELS, MODEL_VERSION, downloadModel, goOnDevice, measureServer, removeModel, setPilotVoice, setVoiceEngine, storageUse, updateAvailable, useModels, useVoicePrefs, type ModelId, type ModelInfo, type ModelState } from '@/lib/models/manager'
 import { Group } from './SettingsTabs'
 import s from './SettingsTabs.module.css'
 
@@ -45,10 +45,26 @@ export function ModelsPanel({ wide }: { wide: boolean }) {
           <Stat label="Per transmission" value={saved == null ? '–' : saved >= 0 ? `${ms(saved)} faster` : `${ms(-saved)} slower`} sub={saved == null ? 'Download speech to text to measure' : `On device ${ms(localMs)} vs server ≈ ${ms(serverMs)}`} tone={saved == null ? undefined : saved >= 0 ? 'good' : 'warn'} />
         </div>
         <div className={s.allRow}>
-          <p className={s.note}>{onDevice && allReady ? 'Everything runs on this device. Your voice never leaves it.' : 'Downloads all three and keeps them. Pilot voices switch to this device; speech stays on the server, which hears aviation words much better (switch it below if you need to be offline).'}</p>
+          <p className={s.note}>{onDevice && allReady ? 'Everything runs on this device. Your voice never leaves it.' : 'Downloads all three and keeps them. Pilot voices switch to this device; speech stays on the server unless you switch it below (it is the same model either way).'}</p>
           <Button variant={allReady ? 'secondary' : 'accent'} size="sm" iconLeft={<Icon name={allReady ? 'check' : 'arrow-down'} size={16} />} disabled={busyAll || anyBusy || allReady} onClick={all} testId="models-all">
             {busyAll ? 'Downloading…' : allReady ? 'All downloaded' : 'Download all models'}
           </Button>
+        </div>
+      </Group>
+      <Group title="Installed on this device" hint={ready.length ? 'Update or remove what you have downloaded' : 'Nothing downloaded yet: download a model below'} span>
+        <div className={s.installed} data-testid="models-installed">
+          {ready.length ? ready.map((m) => {
+            const st = states[m.id], upd = updateAvailable(m.id, st)
+            return (
+              <div key={m.id} className={s.instRow} data-testid={`installed-${m.id}`}>
+                <span className={s.instName}><b>{m.name}</b><span>{st.version ? `Version ${st.version}` : 'Older version'}{upd ? ` · ${MODEL_VERSION[m.id]} available` : ' · up to date'} · {st.bytes ? mb(st.bytes) : `${m.sizeMB} MB`}{st.at ? ` · downloaded ${new Date(st.at).toLocaleDateString()}` : ''}</span></span>
+                <span className={s.instBtns}>
+                  {upd ? <Button variant="accent" size="sm" iconLeft={<Icon name="arrow-down" size={14} />} onClick={() => void downloadModel(m.id)} testId={`installed-${m.id}-update`}>Update</Button> : null}
+                  {m.id !== 's1' ? <Button variant="ghost" size="sm" onClick={() => { if (window.confirm(`Remove ${m.name} from this device?`)) void removeModel(m.id).then(refresh) }} testId={`installed-${m.id}-remove`}>Remove</Button> : null}
+                </span>
+              </div>
+            )
+          }) : null}
         </div>
       </Group>
       <div className={cx(s.modelGrid, wide && s.modelGridWide)} data-span="true">
@@ -72,7 +88,7 @@ function ModelCard({ m, st, voice }: { m: ModelInfo; st: ModelState; voice: { en
   const id: ModelId = m.id
   const chip = st.state === 'ready' ? 'On this device' : st.state === 'downloading' ? `Downloading ${Math.round(st.progress * 100)} %` : st.state === 'error' ? 'Failed' : 'Not downloaded'
   const use = id === 's1' ? null
-    : id === 'stt' ? { items: [{ id: 'server', label: 'Server' }, { id: 'local', label: 'This device' }], value: voice.engine === 'local' ? 'local' : 'server', set: (v: string) => setVoiceEngine(v === 'local' ? 'local' : 'server') }
+    : id === 'stt' ? { items: [{ id: 'server', label: 'Server' }, { id: 'local', label: 'This device' }], value: voice.engine === 'local' ? 'local' : 'server', set: (v: string) => { if (v !== 'local') setVoiceEngine('server'); else if (st.state === 'ready') setVoiceEngine('local'); else void downloadModel('stt').then((ok) => { if (ok) setVoiceEngine('local') }) } }
     : { items: [{ id: 'browser', label: 'Browser' }, { id: 'neural', label: 'This device' }], value: voice.pilot, set: (v: string) => setPilotVoice(v === 'neural' ? 'neural' : 'browser') }
   return (
     <article className={s.model} data-state={st.state} data-testid={`model-${id}`}>
@@ -98,7 +114,7 @@ function ModelCard({ m, st, voice }: { m: ModelInfo; st: ModelState; voice: { en
           <span className={s.useRow}><span className={s.useLabel}>Use</span><Segmented small ariaLabel={`${m.name}: where it runs`} items={use.items} value={use.value} onChange={use.set} testId={`model-${id}-use`} /></span>
         ) : <span className={s.useLabel}>Always runs on this device</span>}
         <Button variant={st.state === 'ready' ? 'ghost' : 'secondary'} size="sm" iconLeft={<Icon name={st.state === 'ready' ? 'rotate-cw' : 'arrow-down'} size={14} />} disabled={st.state === 'downloading'} onClick={() => void downloadModel(id)} testId={`model-${id}-download`}>
-          {st.state === 'ready' ? 'Test again' : st.state === 'downloading' ? 'Downloading…' : st.state === 'error' ? 'Retry' : 'Download'}
+          {updateAvailable(id, st) ? 'Update' : st.state === 'ready' ? 'Test again' : st.state === 'downloading' ? 'Downloading…' : st.state === 'error' ? 'Retry' : 'Download'}
         </Button>
       </footer>
       <p className={s.instead}><span>Instead:</span> {m.instead}</p>

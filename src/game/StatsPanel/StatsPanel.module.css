@@ -37,3 +37,4 @@
 .foot { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3); font: var(--fw-regular) var(--fs-body-s) / 1 var(--font); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .foot strong { color: var(--text-1); font-weight: var(--fw-regular); }
 @media (prefers-reduced-motion: reduce) { .panel { animation: none; } }
+.panel.panel { border: 1px solid var(--line-strong); box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5); }   /* solid, like the flight card: no glass */

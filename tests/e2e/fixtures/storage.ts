@@ -36,7 +36,7 @@ export async function seedLocalStorage(page: Page, values: Record<string, string
 /** Seed the settings blob (merged over the app defaults at load) and its legacy mirrors. */
 export async function seedSettings(page: Page, settings: SettingsSeed): Promise<void> {
   const kv: Record<string, string> = { [LS_KEYS.settings]: JSON.stringify(settings) };
-  if (settings.tts != null) kv[LS_KEYS.tts] = settings.tts ? '1' : '0';
+  if (settings.tts != null) { kv[LS_KEYS.tts] = settings.tts ? '1' : '0'; kv.skycontrol_tts_default_on = '1'; }   // (skip the one-time "voices on" migration)
   if (settings.autoTower != null) kv[LS_KEYS.autoTower] = settings.autoTower ? '1' : '0';
   if (settings.groundTheme) kv[LS_KEYS.groundTheme] = settings.groundTheme;
   await seedLocalStorage(page, kv);
@@ -44,7 +44,7 @@ export async function seedSettings(page: Page, settings: SettingsSeed): Promise<
 
 /** Mark the first-run tips as seen (they never show in test mode anyway; this covers non-test boots from home). */
 export function seedOnboardingSeen(page: Page): Promise<void> {
-  return seedLocalStorage(page, { [LS_KEYS.onboardingSeen]: '1' });
+  return seedLocalStorage(page, { [LS_KEYS.onboardingSeen]: '1', skycontrol_setup_done: '1' });
 }
 
 /** Read one localStorage key from the current page. */

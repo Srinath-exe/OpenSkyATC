@@ -3,6 +3,7 @@
   <REPORTS_DIR>/<YYYY-MM-DD>.jsonl (default: data/reports of the checkout). Read them with scripts/reports.sh.
   Public and unauthenticated, so it is rate-limited per client, capped in size and only ever appends.
 */
+import { withRequestId } from '@/lib/requestId';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { RateLimiter, clientKey } from '../voice/stt/handler';
@@ -21,7 +22,7 @@ function reportsDir(): string {
 }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   if (!limiter.take(clientKey(req.headers))) return json({ error: 'too many reports' }, 429);
   const text = await req.text();
   if (text.length > MAX) return json({ error: 'too large' }, 413);
@@ -36,3 +37,5 @@ export async function POST(req: Request) {
   await fs.appendFile(path.join(dir, `${now.toISOString().slice(0, 10)}.jsonl`), line);
   return json({ ok: true, id });
 }
+
+export const POST = withRequestId(handlePost);

@@ -22,6 +22,22 @@ import { turnPredictor, racetrack, turnRadiusM, cpa, magnetic, hdg3, alt100, dis
 
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
+/** This frame's on-screen spread of parallel approaches (metres, by runway name). The runways stay where they are; the
+ *  approach lines ease apart over the first SPREAD_NM and run parallel from there, and an aircraft on one moves with it. */
+const rwShift = new Map<string, { x: number; y: number; thr: XY; course: number }>();
+const SPREAD_NM = 5.6;
+const spreadAt = (dNM: number) => { const u = Math.max(0, Math.min(1, dNM / SPREAD_NM)); return u * (2 - u); };
+const shown = (a: AircraftState): XY => {
+  const r = (a.ilsCaptured || a.ilsArmed) ? rwShift.get((a.assignedRunway ?? a.plan.runway ?? '').toUpperCase()) : undefined
+  if (!r) return a.pos
+  // (it slides over as it closes on its localizer: full on it, none a mile and a half to the side)
+  const c = r.course * Math.PI / 180, ex = a.pos.x - r.thr.x, ey = a.pos.y - r.thr.y
+  const lat = Math.abs(ex * Math.cos(c) - ey * Math.sin(c)) / NM_TO_M, out = -(ex * Math.sin(c) + ey * Math.cos(c)) / NM_TO_M
+  const u = Math.max(0, Math.min(1, (1.5 - lat) / 1.1)), w = u * u * (3 - 2 * u) * spreadAt(out)
+  return { x: a.pos.x + r.x * w, y: a.pos.y + r.y * w }
+};
+/** Screen boxes of what the chart wrote this frame: data blocks keep off them. */
+const chartBoxes: Array<{ x: number; y: number; w: number; h: number }> = [];
 
 // ── public frame contract ──────────────────────────────────────────────────────
 export interface ProjectedRoute { name: string; kind: 'sid' | 'star'; runways: string[]; beacon: string | null; pts: XY[] }
@@ -53,7 +69,22 @@ export interface Frame {
   measures: Measure[];
   liveMeasure: Measure | null;
   reducedMotion: boolean;
+  /** The hover compass (owned by the view, animated here). */
+  compass: CompassState;
 }
+
+/** A heading rose round the hovered aircraft: the tick under the pointer swells and reads out its heading. */
+export interface CompassState {
+  /** The aircraft the pointer is on or near (set by the view); `id` is the one drawn (it changes once closed). */
+  target: number | null;
+  id: number | null;
+  mx: number; my: number;
+  open: number;
+  ticks: Float32Array;
+  last: number;
+}
+export const COMPASS_R = 58;
+export const newCompass = (): CompassState => ({ target: null, id: null, mx: 0, my: 0, open: 0, ticks: new Float32Array(72).fill(1), last: 0 });
 
 export interface HitGeometry {
   /** Screen position of every aircraft (CSS px). */
@@ -88,6 +119,7 @@ export function paint(fr: Frame): HitGeometry {
 
   drawChart(fr, hit);
   drawTraffic(fr, hit);
+  drawCompass(fr);
   drawMeasures(fr, hit);
   drawDrag(fr);
   return hit;
@@ -170,47 +202,62 @@ function drawChart(fr: Frame, hit: HitGeometry): void {
     }
   }
 
-  // ILS feathers + extended centrelines + GS-intercept circles; runways.
-  const activeArr = new Set(engine.activeEnds('arr').map(r => r.name));
+  // ILS feathers + extended centrelines + GS-intercept circles, only on the runways taking arrivals; runways.
+  const activeArr = engine.arrivalRunwaysInUse();
   const ilsByName = new Map(engine.ilsRunways.map(r => [r.name, r] as const));
-  const runways = radar ? radar.runways : [];
-  for (const rw of runways) {
-    const ils = ilsByName.get(rw.name);
-    const app = (rw.course + 180) % 360; // feather direction (from threshold toward inbound traffic)
-    const active = activeArr.has(rw.name);
-    const thrS = cam.toScreen(rw.thr);
-    const featherM = ILS_CONST.gsRangeNM * NM_TO_M;
-    // localizer wedge ±2.5°, fill only
-    const l = cam.toScreen(advance(rw.thr, app - ILS_CONST.captureDeg, featherM));
-    const r = cam.toScreen(advance(rw.thr, app + ILS_CONST.captureDeg, featherM));
-    ctx.fillStyle = t.limeFeather;
-    ctx.beginPath(); ctx.moveTo(thrS.x, thrS.y); ctx.lineTo(l.x, l.y); ctx.lineTo(r.x, r.y); ctx.closePath(); ctx.fill();
+  // parallel approaches are ~230-1300 m apart: zoomed out they draw as one line. The approach LINES of the runways in use
+  // are spread to at least GAP_PX on screen; the runways themselves keep their true places
+  const GAP_PX = 38; rwShift.clear(); chartBoxes.length = 0;
+  const pair = new Map<string, { side: number; gap: number }>();
+  const all = radar ? radar.runways : [];
+  for (const rw of all) {
+    if (!activeArr.has(rw.name)) continue;
+    const c = rw.course * DEG, nx = Math.cos(c), ny = -Math.sin(c);
+    const o = all.find(q => q !== rw && activeArr.has(q.name) && Math.abs(angleDelta(q.course, rw.course)) < 5 && Math.abs((rw.thr.x - q.thr.x) * nx + (rw.thr.y - q.thr.y) * ny) < 2000);
+    if (!o) continue;
+    const cross = (rw.thr.x - o.thr.x) * nx + (rw.thr.y - o.thr.y) * ny, gapPx = Math.abs(cross) * cam.k;
+    if (Math.abs(cross) < 1) continue;
+    pair.set(rw.name, { side: -Math.sign(cross), gap: Math.max(gapPx, GAP_PX) / cam.k });
+    if (gapPx < GAP_PX) { const m = (GAP_PX - gapPx) / 2 / cam.k * Math.sign(cross); rwShift.set(rw.name, { x: nx * m, y: ny * m, thr: rw.thr, course: rw.course }); }
+  }
+  for (const rw of all) {
+    if (!activeArr.has(rw.name)) continue;
+    const ils = ilsByName.get(rw.name), app = (rw.course + 180) % 360, sh = rwShift.get(rw.name), mate = pair.get(rw.name), c = rw.course * DEG;
+    const featherNM = ILS_CONST.gsRangeNM, tanC = Math.tan(ILS_CONST.captureDeg * DEG);
+    /** A point `d` NM out on the approach as drawn, `off` metres to its right (looking along the landing course). */
+    const at = (d: number, off = 0) => { const p = advance(rw.thr, app, d * NM_TO_M), w = sh ? spreadAt(d) : 0; return cam.toScreen({ x: p.x + (sh ? sh.x * w : 0) + Math.cos(c) * off, y: p.y + (sh ? sh.y * w : 0) - Math.sin(c) * off }); };
+    const steps = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.6, 8, 10];
+    // localizer wedge +-2.5 deg, fill only; beside a parallel one it stops half way to it, so they do not lie on each other
+    const edge = (side: number) => [...steps, featherNM].map(d => { const lim = mate && mate.side === side ? Math.max(0, mate.gap / 2 * Math.max(spreadAt(d), 0.1) - 2 / cam.k) : Infinity; return at(d, side * Math.min(lim, d * NM_TO_M * tanC)); });
+    ctx.fillStyle = t.limeFeather; ctx.beginPath(); const L = edge(-1), Rr = edge(1).reverse(); [...L, ...Rr].forEach((p, k) => k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.fill();
     // extended centreline 10 NM
-    const e = cam.toScreen(advance(rw.thr, app, 10 * NM_TO_M));
-    ctx.strokeStyle = active ? t.lime : t.lime50; ctx.lineWidth = active ? 2 : 1; ctx.setLineDash([10, 6]);
-    ctx.beginPath(); ctx.moveTo(thrS.x, thrS.y); ctx.lineTo(e.x, e.y); ctx.stroke(); ctx.setLineDash([]);
-    // 2000/3000/4000 ft glideslope intercept circles
-    if (ils && cam.pxPerNM > 8) {
-      ctx.strokeStyle = t.w35; ctx.lineWidth = 1;
-      ctx.fillStyle = t.text5; ctx.font = font(t, 10); ctx.textAlign = 'left';
-      for (const ft of [2000, 3000, 4000]) {
-        const d = gsDistM(ft, ils);
-        const p = cam.toScreen(advance(rw.thr, app, d));
-        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, TAU); ctx.stroke();
-        if (cam.pxPerNM > 22 && active) ctx.fillText(String(ft), p.x + 6, p.y + (rw.course > 90 && rw.course < 270 ? -7 : 7));
-      }
+    ctx.strokeStyle = t.lime; ctx.lineWidth = 2; ctx.setLineDash([10, 6]);
+    ctx.beginPath(); steps.forEach((d, k) => { const p = at(d); if (k) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y); }); ctx.stroke(); ctx.setLineDash([]);
+    const side = mate ? -mate.side : 1, ox = Math.cos(c) * side, oy = Math.sin(c) * side;   // outward on screen (y down)
+    const note = (p: { x: number; y: number }, txt: string, px: number, color: string) => {
+      ctx.font = font(t, px, 500); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const w = textW(ctx, ctx.font, txt) + 10, h = px + 7, x = p.x + ox * (12 + Math.abs(ox) * w / 2), y = p.y + oy * (12 + Math.abs(oy) * h / 2);
+      ctx.fillStyle = t.bg; roundRect(ctx, x - w / 2, y - h / 2, w, h, 5); ctx.fill(); ctx.fillStyle = color; ctx.fillText(txt, x, y + 0.5);
+      chartBoxes.push({ x: x - w / 2, y: y - h / 2, w, h });
+    };
+    // its name on its own line, where the lines have come apart
+    if (cam.pxPerNM > 9) note(at(Math.max(3.4, 60 / cam.pxPerNM)), rw.name, 14, t.text1);
+    // 2000/3000/4000 ft glideslope intercepts: bright, across the line, named on the outer side
+    if (ils && cam.pxPerNM > 8) for (const ft of [2000, 3000, 4000]) {
+      const p = at(gsDistM(ft, ils) / NM_TO_M);
+      ctx.strokeStyle = t.limeBright; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(p.x - ox * 7, p.y - oy * 7); ctx.lineTo(p.x + ox * 7, p.y + oy * 7); ctx.stroke();
+      if (cam.pxPerNM > 13) note(p, String(ft), 13, t.limeBright);
     }
   }
-  // Runway strokes (true length) + names when zoomed in; airport circle when zoomed out.
-  ctx.strokeStyle = t.w55; ctx.lineWidth = 2;
-  for (const rw of runways) {
-    const a = cam.toScreen(rw.thr), b = cam.toScreen(advance(rw.thr, rw.course, rw.lengthM));
-    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    if (cam.pxPerNM > 14) {
-      const lp = cam.toScreen(advance(rw.thr, (rw.course + 180) % 360, 420));
-      ctx.fillStyle = t.w55; ctx.font = font(t, 11); ctx.textAlign = 'center';
-      ctx.fillText(rw.name, lp.x, lp.y);
-    }
+  // Runway strokes (true place and length); the other names only close up, each where it has room.
+  ctx.strokeStyle = t.w70; ctx.lineWidth = 2;
+  for (const rw of all) { const a = cam.toScreen(rw.thr), b = cam.toScreen(advance(rw.thr, rw.course, rw.lengthM)); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  if (cam.pxPerNM > 32) for (const rw of all) {
+    if (activeArr.has(rw.name)) continue;
+    const p = cam.toScreen(advance(rw.thr, (rw.course + 180) % 360, 16 / cam.k)); ctx.font = font(t, 12, 500); const w = textW(ctx, ctx.font, rw.name) + 4, b = { x: p.x - w / 2, y: p.y - 8, w, h: 16 };
+    if (chartBoxes.some(q => b.x < q.x + q.w && b.x + b.w > q.x && b.y < q.y + q.h && b.y + b.h > q.y)) continue;
+    chartBoxes.push(b); ctx.fillStyle = t.w55; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(rw.name, p.x, p.y);
   }
   if (cam.pxPerNM <= 20) {
     const f = cam.toScreen(fr.fieldXY);
@@ -284,7 +331,7 @@ function drawTraffic(fr: Frame, hit: HitGeometry): void {
     const air = isAirborne(a);
     if (!air) continue;
     const isSel = a.id === fr.selectedId;
-    const s = cam.toScreen(a.pos);
+    const s = cam.toScreen(shown(a));
 
     // Hold: predicted racetrack (dashed) + actual flown track (solid)
     if (a.navMode === 'hold' && a.holdFix) {
@@ -369,7 +416,7 @@ function drawTraffic(fr: Frame, hit: HitGeometry): void {
   // ── STCA / conflict pair lines with CPA prediction ──
   ctx.lineWidth = 1;
   for (const p of stcaPairs) {
-    const sa = cam.toScreen(p.a.pos), sb = cam.toScreen(p.b.pos);
+    const sa = cam.toScreen(shown(p.a)), sb = cam.toScreen(shown(p.b));
     ctx.strokeStyle = t.red; ctx.globalAlpha = pulse; ctx.setLineDash([4, 4]); ctx.lineDashOffset = crawl;
     ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y); ctx.stroke();
     ctx.setLineDash([]); ctx.lineDashOffset = 0; ctx.globalAlpha = 1;
@@ -394,7 +441,7 @@ function drawTraffic(fr: Frame, hit: HitGeometry): void {
   const reqs: BlockRequest[] = [];
   const magVar = engine.magVar;
   for (const a of aircraft) {
-    const s = cam.toScreen(a.pos);
+    const s = cam.toScreen(shown(a)), real = cam.toScreen(a.pos), sx = s.x - real.x, sy = s.y - real.y;   // (its trail and vector move with it)
     const air = isAirborne(a);
     hit.symbols.set(a.id, { x: s.x, y: s.y, airborne: air });
     if (s.x < -80 || s.y < -80 || s.x > cam.width + 80 || s.y > cam.height + 80) continue;
@@ -422,13 +469,14 @@ function drawTraffic(fr: Frame, hit: HitGeometry): void {
     for (let i = 0; i < dots.length; i++) {
       const q = cam.toScreen(dots[i]);
       ctx.globalAlpha = 0.05 + 0.30 * ((i + 1) / dots.length) * (dim ? 0.5 : 1);
-      ctx.beginPath(); ctx.arc(q.x, q.y, 1, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.arc(q.x + sx, q.y + sy, 1, 0, TAU); ctx.fill();
     }
     ctx.globalAlpha = 1;
 
     // 1-minute vector
     if (!dim || isSel) {
       const v = cam.toScreen(advance(a.pos, a.heading, a.speed * KTS_TO_MPS * 60));
+      v.x += sx; v.y += sy;
       const dx = v.x - s.x, dy = v.y - s.y, len = Math.hypot(dx, dy);
       if (len > SYMBOL_R + 1) {
         ctx.strokeStyle = isSel ? t.orange60 : t.w35; ctx.lineWidth = 1;
@@ -463,7 +511,7 @@ function drawTraffic(fr: Frame, hit: HitGeometry): void {
   }
 
   // ── place + paint data blocks ──
-  const placed = fr.placer.place(reqs, cam.width, now);
+  const placed = fr.placer.place(reqs, cam.width, now, chartBoxes);
   for (const b of blocks) {
     const p = placed.get(b.id); if (!p) continue;
     const s = hit.symbols.get(b.id)!;
@@ -498,9 +546,10 @@ function blockLines(a: AircraftState, fr: Frame, t: RadarTheme, dim: boolean, ma
   const c2 = emerg ? t.text1 : dim ? t.text4 : t.text2;
   const c3 = emerg ? t.text1 : dim ? t.text4 : t.text3;
   const dot = { text: ' · ', color: emerg ? t.text1 : t.text4 } as Seg;
-  const tag = dim ? tagFor(a.onFrequency) : null;
+  // handed off (on another controller's frequency): "→ TWR" in green, selected or not, so it reads as done
+  const tag = POSITION_OWNER[a.onFrequency] !== fr.position ? tagFor(a.onFrequency) : null;
   const l1: Seg[] = [{ text: a.callsign, color: c1, weight: 500 }];
-  if (tag) l1.push({ text: '  ' + tag, color: t.text4 });
+  if (tag) l1.push({ text: '  → ' + tag, color: t.green, weight: 500 });
   if (!dim && a.requests.length && a.requests[0].answeredAt == null) l1.push({ text: '  REQ', color: t.orange, weight: 500 });
   if (emerg) l1.push({ text: '  EM', color: t.text1, weight: 500 });
   if (dim) return [l1, [{ text: alt100(a.altitude), color: c2 }]];
@@ -595,11 +644,70 @@ function drawMeasures(fr: Frame, hit: HitGeometry): void {
   }
 }
 
+function drawCompass(fr: Frame): void {
+  const st = fr.compass, { ctx, t, cam } = fr;
+  const dt = Math.min(0.05, Math.max(0, (fr.now - (st.last || fr.now)) / 1000)); st.last = fr.now;
+  const ease = (rate: number) => fr.reducedMotion ? 1 : 1 - Math.exp(-dt * rate);
+  // open on the target; a different target: close this one first, then open on the new one
+  if (st.target !== st.id && st.open < 0.04) { st.id = st.target; st.ticks.fill(1); }
+  st.open += ((st.id != null && st.id === st.target ? 1 : 0) - st.open) * ease(14);
+  if (st.id == null || st.open < 0.01) return;
+  const a = fr.engine.byId(st.id); if (!a) { st.id = null; return; }
+  const s = cam.toScreen(shown(a)), mv = fr.engine.magVar;
+  const o = st.open, R = COMPASS_R * (0.82 + 0.18 * o);
+  const dx = st.mx - s.x, dy = st.my - s.y, near = Math.hypot(dx, dy) > SYMBOL_R + 6 && st.id === st.target;
+  const ptrMag = ((Math.atan2(dx, -dy) * 180 / Math.PI - mv) % 360 + 360) % 360;   // the pointer's bearing, magnetic
+  const dir = (mag: number) => { const r = (mag + mv) * Math.PI / 180; return { x: Math.sin(r), y: -Math.cos(r) }; };
+  ctx.save(); ctx.globalAlpha = o;
+  // the ring
+  ctx.strokeStyle = t.w25; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(s.x, s.y, R, 0, TAU); ctx.stroke();
+  // ticks every 5 degrees; the ones near the pointer swell (each eases to its size: smooth as the pointer sweeps)
+  const k = ease(16);
+  for (let i = 0; i < 72; i++) {
+    const m = i * 5, d = Math.abs(angleDelta(m, ptrMag));
+    const want = near ? 1 + 1.8 * Math.exp(-(d * d) / (2 * 6 * 6)) : 1;
+    st.ticks[i] += (want - st.ticks[i]) * k;
+    const sc = st.ticks[i], v = dir(m);
+    const len = (m % 30 === 0 ? 9 : m % 10 === 0 ? 6 : 3.5) * sc;
+    const hot = Math.min(1, (sc - 1) / 1.2);
+    ctx.strokeStyle = hot > 0.15 ? t.orange : m % 30 === 0 ? t.w55 : t.w35;
+    ctx.globalAlpha = o * (hot > 0.15 ? 0.45 + 0.55 * hot : 1);
+    ctx.lineWidth = m % 30 === 0 ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(s.x + v.x * R, s.y + v.y * R); ctx.lineTo(s.x + v.x * (R + len), s.y + v.y * (R + len)); ctx.stroke();
+    if (m % 30 === 0) {
+      const lr = R + 17 + 4 * (sc - 1);
+      ctx.globalAlpha = o * (0.55 + 0.45 * hot); ctx.fillStyle = hot > 0.3 ? t.orange : t.text3;
+      ctx.font = font(t, Math.round(9 + 3 * (sc - 1)), hot > 0.3 ? 500 : 400); ctx.textAlign = 'center';
+      ctx.fillText(String(m === 0 ? 36 : m / 10).padStart(2, '0'), s.x + v.x * lr, s.y + v.y * lr);
+    }
+  }
+  ctx.globalAlpha = o;
+  // where it is pointing now: a filled marker on the ring
+  const cur = magnetic(a.heading, mv), cv = dir(cur);
+  ctx.fillStyle = t.text1; ctx.beginPath();
+  ctx.moveTo(s.x + cv.x * (R - 1), s.y + cv.y * (R - 1));
+  ctx.lineTo(s.x + cv.x * (R - 8) - cv.y * 3.5, s.y + cv.y * (R - 8) + cv.x * 3.5);
+  ctx.lineTo(s.x + cv.x * (R - 8) + cv.y * 3.5, s.y + cv.y * (R - 8) - cv.x * 3.5); ctx.closePath(); ctx.fill();
+  // the pointer's heading: a line out to the ring and the readout beyond it
+  if (near) {
+    const snap = Math.round(ptrMag / 5) * 5 % 360, v = dir(snap);
+    ctx.strokeStyle = t.orange; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(s.x + v.x * (SYMBOL_R + 3), s.y + v.y * (SYMBOL_R + 3)); ctx.lineTo(s.x + v.x * R, s.y + v.y * R); ctx.stroke(); ctx.setLineDash([]);
+    const tr = R + 36, tx = s.x + v.x * tr, ty = s.y + v.y * tr, label = `${hdg3(snap)}°`;
+    ctx.font = font(t, 13, 500); const w = ctx.measureText(label).width + 12;
+    ctx.fillStyle = t.bg; ctx.globalAlpha = o * 0.85; ctx.beginPath(); ctx.roundRect(tx - w / 2, ty - 10, w, 20, 6); ctx.fill();
+    ctx.globalAlpha = o; ctx.fillStyle = t.orange; ctx.textAlign = 'center'; ctx.fillText(label, tx, ty + 0.5);
+    const turn = angleDelta(cur, snap);
+    if (Math.abs(turn) >= 5) { ctx.font = font(t, 10); ctx.fillStyle = t.text3; ctx.fillText(`${turn < 0 ? 'left' : 'right'} ${Math.round(Math.abs(turn))}°`, tx, ty + 17); }
+  }
+  ctx.restore();
+}
+
 function drawDrag(fr: Frame): void {
   const { ctx, t, cam, engine, drag } = fr;
   if (!drag) return;
   const a = engine.byId(drag.id); if (!a) return;
-  const s = cam.toScreen(a.pos);
+  const s = cam.toScreen(shown(a));
   const c = cam.toScreen(drag.cursor);
   ctx.strokeStyle = drag.snap ? t.lime : drag.dir ? t.orange : t.w55; ctx.lineWidth = 1; ctx.setLineDash(drag.snap ? [] : [6, 4]);
   ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(c.x, c.y); ctx.stroke(); ctx.setLineDash([]);

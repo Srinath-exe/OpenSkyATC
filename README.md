@@ -13,7 +13,7 @@
 
 You are San Francisco's ground, tower or approach controller. Key the mic and talk; the pilots read it back and fly what you said. Everything that listens, understands or speaks runs on small models, on a CPU server, in the browser or in the phone app. **No large language model and no GPU at run time.**
 
-> OpenATC was called SkyControl until recently, so the models and some code still carry that name.
+> OpenATC was called SkyControl until recently, so the models on Hugging Face and some internal names still carry the old one.
 
 ## How it works
 
@@ -68,7 +68,7 @@ npm run test:e2e          # Playwright
 
 Typing commands always works. Voice input needs the speech server in `src/app/api/voice/stt/`, which loads ATC-ASR from `~/.cache/openatc-stt/` (set `OPENATC_STT_PARAKEET_DIR`). Without it the game uses the browser's own speech recognition.
 
-This repository is a snapshot from 14 November 2026. The live game is newer, and so is the System One on Hugging Face that the numbers above describe.
+This repository is a snapshot from 25 November 2026, the same code as the live game that day. The numbers above describe the System One on Hugging Face.
 
 ## Where things are
 
@@ -80,7 +80,7 @@ This repository is a snapshot from 14 November 2026. The live game is newer, and
 | [`src/game/`](src/game/) | the game UI: strips, command panel, settings, the tutorial |
 | [`src/app/`](src/app/) | pages: landing `/`, set-up `/start`, game `/play`, tutorial `/learn`, settings |
 | [`ml/`](ml/) | everything trained: data generators, tokenizer, command model, safety gate, speech and voice benchmarks |
-| [`mobile/`](mobile/) | the Flutter app: the game in a WebView, on-device speech |
+| [`mobile/`](mobile/) | the Flutter app: the same game engine, native in portrait, on-device speech |
 | [`tests/`](tests/) | engine, commands, systems and tutorial (headless), and Playwright end-to-end |
 
 ## Licence

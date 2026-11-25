@@ -92,6 +92,8 @@ test.describe('comm log', () => {
     const dom = await game.radioRows();
     const store = await sim.radio();
     expect(dom.map((r) => [r.who, r.text])).toEqual(store.map((l) => [l.who, l.text]));
+    // (a call selects its aircraft, so the camera follows the plane being spoken to: clear that first)
+    await sim.select(null);
     await expect(line).toHaveAttribute('data-selected', 'false');
     await line.click();
     await expect(game.panel()).toHaveAttribute('data-callsign', 'UAL9');
@@ -626,7 +628,7 @@ test.describe('comm log', () => {
     await expect(page.locator('body')).toHaveAttribute('data-ptt', 'true');
     await expect(page.getByTestId('cmd-ptt-transcript')).toBeVisible();
     // with the Web Speech API the strip listens; without it, it says to type instead
-    await expect(page.getByTestId('cmd-ptt-transcript')).toContainText(/listening|type the command/i);
+    await expect(page.getByTestId('cmd-ptt-transcript')).toContainText(/listening|type the command|microphone/i);   // (headless: no microphone)
     await page.mouse.up();
     await expect(ptt).toHaveAttribute('data-state', 'off');
     await expect(game.txIndicator()).toHaveAttribute('data-state', 'idle');

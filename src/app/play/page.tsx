@@ -15,7 +15,7 @@ import * as persist from '@/components/atc/persist';
 import { applyPrefsToDocument } from '@/app/_lib/persist';
 import { GameShell } from '@/game/GameShell';
 
-const FALLBACK_ICAO = 'EGLL';
+const FALLBACK_ICAO = 'KSFO';   // the launch airport
 const POSITIONS: Position[] = ['ground', 'tower', 'approach'];
 
 function readUrl(): Partial<StartConfig> {

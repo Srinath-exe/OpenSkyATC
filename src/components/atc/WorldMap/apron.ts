@@ -69,6 +69,14 @@ export function buildStands(world: World, air: OsmAirport, base: number, fades: 
   // stands drawn closer together than their code's wingspan (OSM spacing) get a narrower envelope so the boxes never overlap
   const stopsXY = air.stands.map(st => world.toLocal(st.lng, st.lat));
   const nearestM = (i: number) => { let d = Infinity; for (let j = 0; j < stopsXY.length; j++) if (j !== i) d = Math.min(d, Math.hypot(stopsXY[i].x - stopsXY[j].x, stopsXY[i].y - stopsXY[j].y)); return d; };
+  const halfOf = (i: number) => Math.max(8, Math.min((ENVELOPE[air.stands[i].size] ?? ENVELOPE.C)[0] / 2 + 2, nearestM(i) / 2 - 1.5));
+  // the boxes of stands that fan round a corner meet behind the wings: each is drawn in toward the tail until they clear
+  const taper = air.stands.map(() => 1);
+  { const halves = air.stands.map((_, i) => halfOf(i));
+    const outline = (i: number): XY[] => { const st = air.stands[i], len = (ENVELOPE[st.size] ?? ENVELOPE.C)[1], h = st.headingIn * Math.PI / 180, c = stopsXY[i]; const at = (a: number, b: number): XY => ({ x: c.x + Math.sin(h) * a + Math.cos(h) * b, y: c.y + Math.cos(h) * a - Math.sin(h) * b }); const w = halves[i], t = w * taper[i]; return [at(4, w), at(-len * 0.6, w), at(2 - len, t), at(2 - len, -t), at(-len * 0.6, -w), at(4, -w)]; };
+    const apart = (A: XY[], B: XY[]) => { for (const P of [A, B]) for (let k = 0; k < 6; k++) { const p = P[k], q = P[(k + 1) % 6], nx = q.y - p.y, ny = p.x - q.x, n = Math.hypot(nx, ny) || 1; let a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity; for (const v of A) { const d = (v.x * nx + v.y * ny) / n; a0 = Math.min(a0, d); a1 = Math.max(a1, d); } for (const v of B) { const d = (v.x * nx + v.y * ny) / n; b0 = Math.min(b0, d); b1 = Math.max(b1, d); } if (a1 < b0 + 0.3 || b1 < a0 + 0.3) return true; } return false; };
+    const pairs: [number, number][] = []; for (let i = 0; i < stopsXY.length; i++) for (let j = i + 1; j < stopsXY.length; j++) if (Math.hypot(stopsXY[i].x - stopsXY[j].x, stopsXY[i].y - stopsXY[j].y) < 130) pairs.push([i, j]);
+    for (let k = 0; k < 14; k++) for (const [i, j] of pairs) if (Math.min(taper[i], taper[j]) > 0.3 && !apart(outline(i), outline(j))) { taper[i] = Math.max(0.3, taper[i] - 0.06); taper[j] = Math.max(0.3, taper[j] - 0.06); } }
   for (const [i, st] of air.stands.entries()) {
     // the painted lead-in is the line the aircraft drive: straight along the stand's axis, with an arc onto the lane
     // either way (the same arcs taxi-in and pushback paths are built with)
@@ -84,13 +92,16 @@ export function buildStands(world: World, air: OsmAirport, base: number, fades: 
     barGeos.push(ribbon(stop.clone().addScaledVector(l, -3).setY(base + 0.81), stop.clone().addScaledVector(l, 3).setY(base + 0.81), 0.6));
     // envelope: nose 4 m ahead of the stop, tail one length behind; drawn as a thin outline
     const [span0, len] = ENVELOPE[st.size] ?? ENVELOPE.C;
-    const half = Math.max(8, Math.min(span0 / 2 + 2, nearestM(i) / 2 - 1.5));
+    const half = halfOf(i);
     const nose = stop.clone().addScaledVector(f, 4).setY(base + 0.7), tail = stop.clone().addScaledVector(f, -(len - 2)).setY(base + 0.7);
-    // stand safety line: down both wingtip sides and across the tail (open toward the terminal)
-    { const yy = base + 0.79; const w = 0.3;
-      const c = [nose.clone().addScaledVector(l, half).setY(yy), tail.clone().addScaledVector(l, half).setY(yy), tail.clone().addScaledVector(l, -half).setY(yy), nose.clone().addScaledVector(l, -half).setY(yy)];
-      const ext = f.clone().multiplyScalar(w / 2);
-      envGeos.push(ribbon(c[0], c[1].clone().sub(ext), w), ribbon(c[1], c[2], w), ribbon(c[2].clone().sub(ext), c[3], w)); }
+    // stand safety line: down both wingtip sides and across the tail (open toward the terminal), drawn in behind the wings
+    // where the next stand's box would otherwise lie over it (the corners of a pier)
+    { const yy = base + 0.79; const w = 0.3, th = half * taper[i];
+      const bend = stop.clone().addScaledVector(f, -(len * 0.6)).setY(yy);
+      const side = (s: number) => [nose.clone().addScaledVector(l, half * s).setY(yy), bend.clone().addScaledVector(l, half * s), tail.clone().addScaledVector(l, th * s).setY(yy)];
+      const A = side(1), B = side(-1), ext = f.clone().multiplyScalar(w / 2);
+      for (const c of [A, B]) envGeos.push(ribbon(c[0], c[1].clone().sub(ext), w), ribbon(c[1], c[2].clone().sub(ext), w));
+      envGeos.push(ribbon(A[2], B[2], w)); }
     // concrete pad under the envelope: gate areas read as paved even where OSM has no apron polygon (sits just below
     // the real apron slab, so it only shows where that is missing)
     padGeos.push(ribbon(nose.clone().addScaledVector(f, 4).setY(base + 0.55), tail.clone().addScaledVector(f, -4).setY(base + 0.55), half * 2 + 6));
@@ -188,6 +199,8 @@ export function buildStands(world: World, air: OsmAirport, base: number, fades: 
   for (const b of air.buildings) {
     if (b.kind !== 'terminal') continue;
     const poly = b.polygon.map(p => V(world.toLocal(p.lng, p.lat)));
+    // (a terminal nobody parks at - one being built, a car park mapped as one - gets no concrete ring on the grass)
+    if (!poly.some((p, i) => { const q = poly[(i + 1) % poly.length]; const n = Math.max(1, Math.ceil(p.distanceTo(q) / 40)); for (let k = 0; k < n; k++) if (near(p.clone().lerp(q, k / n), 130)) return true; return false; })) continue;
     for (let i = 0; i < poly.length; i++) slab(poly[i], poly[(i + 1) % poly.length], 90);
   }
   if (padGeos.length) { const pm = new THREE.Mesh(mergeGeometries(padGeos), apronMaterial()); pm.renderOrder = 0; g.add(pm); }
@@ -197,36 +210,48 @@ export function buildStands(world: World, air: OsmAirport, base: number, fades: 
   add(leadBack, black, 3); add(envGeos, red, 3); add(leadGeos, yellow, 4); add(barGeos, yellow, 4); add(panelGeos, black, 4);
   if (plateGeos.length) {
     const pm = markingMaterial(PALETTE.taxiLine); pm.map = plateAtlas.texture; pm.transparent = true; pm.depthWrite = false; pm.alphaTest = 0.05;
-    const plates = new THREE.Mesh(mergeGeometries(plateGeos), pm); plates.renderOrder = 5; g.add(plates);
+    const plates = new THREE.Mesh(mergeGeometries(plateGeos), pm); plates.renderOrder = 5; plates.name = 'stand-numbers'; g.add(plates);
   }
   void fades;
   return g;
 }
 
 /** Nearest point on any terminal outline to p (three frame), or null when none is within maxM. */
-function nearestTerminalPoint(polys: THREE.Vector3[][], p: THREE.Vector3, maxM: number): THREE.Vector3 | null {
+function nearestTerminalPoint(polys: THREE.Vector3[][], p: THREE.Vector3, maxM: number, ok?: (q: THREE.Vector3) => boolean): THREE.Vector3 | null {
   let best: THREE.Vector3 | null = null, bd = maxM;
   const ab = new THREE.Vector3(), ap = new THREE.Vector3(), q = new THREE.Vector3();
+  const take = () => { if (ok && !ok(q)) return; const d = q.distanceTo(p); if (d < bd) { bd = d; best = q.clone(); } };
   for (const poly of polys) for (let i = 0; i < poly.length; i++) {
     const a = poly[i], b = poly[(i + 1) % poly.length];
     ab.subVectors(b, a); ap.subVectors(p, a);
     const t = Math.max(0, Math.min(1, ab.lengthSq() > 0 ? ap.dot(ab) / ab.lengthSq() : 0));
-    q.copy(a).addScaledVector(ab, t);
-    const d = q.distanceTo(p);
-    if (d < bd) { bd = d; best = q.clone(); }
+    q.copy(a).addScaledVector(ab, t); take();
+    // with a filter the nearest point may be ruled out while the rest of the wall is fine: try along the wall too
+    if (ok) for (let k = 0; k <= 16; k++) { q.copy(a).addScaledVector(ab, k / 16); take(); }
   }
   return best;
 }
 
+/** Gates by a terminal that board on foot or by bus: Paris 3 and 2G. */
+const NO_BRIDGE: Record<string, RegExp> = { LFPG: /^[JQ]\d/ };
 /** Where a gate's bridge meets the aircraft and the terminal: the forward-left door (the nose wheel stops about abeam
  *  it on every type), the cab beside it, and the nearest point of a terminal outline. */
 function gateGeometry(st: OsmStand, world: World, base: number, polys: THREE.Vector3[][]): { door: THREE.Vector3; cab: THREE.Vector3; pier: THREE.Vector3; dir: THREE.Vector3; wide: boolean; f: THREE.Vector3; l: THREE.Vector3 } | null {
   const sp = world.toLocal(st.lng, st.lat); const stop = toV3(sp.x, sp.y, base);
   const { f, l } = basis(st.headingIn);
   const wide = st.size === 'D' || st.size === 'E' || st.size === 'F';
-  const door = stop.clone().addScaledVector(f, -0.8).addScaledVector(l, wide ? 3.1 : 2.0);
+  // the door at a wide-body's skin (a 777 is 6.2 m across, an A380 7.1 m): a narrow-body then has a small gap to the cab,
+  // where sizing it by the stand put the cab inside any wide-body parked there
+  const half = st.size === 'F' ? 3.6 : 3.2;
+  const door = stop.clone().addScaledVector(f, -0.8).addScaledVector(l, half);
   const cab = door.clone().addScaledVector(l, 2.4);
-  const pier = nearestTerminalPoint(polys, cab, 95); if (!pier) return null;
+  // the rotunda on the door side of the aircraft, clear of the fuselage: the nearest wall on the other side sent the
+  // tunnel straight across the airframe
+  const leftOf = (q: THREE.Vector3) => q.clone().sub(stop).dot(l) > half + 4;
+  // a real bridge reaches about 45 m (two telescoping sections); a stand further out is a remote stand (stairs and a bus)
+  const ahead = (q: THREE.Vector3) => q.clone().sub(stop).dot(f) > -12;   // never back past the wing to some other building
+  const REACH = 65;   // (the longest fixed walkways: Changi B5, JFK A2B)
+  const pier = nearestTerminalPoint(polys, cab, REACH, q => leftOf(q) && ahead(q)) ?? nearestTerminalPoint(polys, cab, REACH, ahead); if (!pier) return null;
   const span = cab.clone().sub(pier); if (span.length() < 0.5) return null;
   const dir = span.clone().normalize();
   // a stop line drawn right at the pier still gets a short bridge: the rotunda then sits inside the building
@@ -239,7 +264,8 @@ function gateGeometry(st: OsmStand, world: World, base: number, polys: THREE.Vec
  * sill, the drive column with its wheel bogie, and the cab turned square to the fuselage with its canopy.
  */
 export function buildJetBridges(world: World, air: OsmAirport, base: number): THREE.Object3D | null {
-  const polys = air.buildings.filter(b => b.kind === 'terminal').map(b => b.polygon.map(p => { const q = world.toLocal(p.lng, p.lat); return toV3(q.x, q.y, base); }));
+  // (not the huts mapped as terminals: boarding stations at remote stands, a lounge - nothing is drawn there to hang a bridge on)
+  const polys = air.buildings.filter(b => b.kind === 'terminal' && (air.icao === 'KSFO' || (b.areaM2 ?? 1e9) > 2100)).map(b => b.polygon.map(p => { const q = world.toLocal(p.lng, p.lat); return toV3(q.x, q.y, base); }));
   if (!polys.length) return null;
   const geos: THREE.BufferGeometry[] = []; const colors: number[] = [];
   const body = new THREE.Color('#dfe1de'), roof = new THREE.Color('#b4b7b5'), steel = new THREE.Color('#55585a'), glass = new THREE.Color('#33434f'), dark = new THREE.Color('#26282a');
@@ -254,14 +280,24 @@ export function buildJetBridges(world: World, air: OsmAirport, base: number): TH
   const cyl = (p: THREE.Vector3, r: number, y0: number, y1: number, col: THREE.Color, seg = 14) => { const geo = new THREE.CylinderGeometry(r, r, y1 - y0, seg); geo.translate(p.x, (y0 + y1) / 2, p.z); push(geo, col); };
   let count = 0;
   for (const st of air.stands) {
-    if (st.type === 'remote' || st.closed) continue;
+    if (st.type === 'remote' || st.closed || NO_BRIDGE[air.icao]?.test(st.ref)) continue;
     const G = gateGeometry(st, world, base, polys); if (!G) continue;
     const sill = base + (G.wide ? 4.9 : 3.5), hall = base + 4.4;
     // rotunda: column, glazed drum, roof cap
     const rot = G.pier.clone().addScaledVector(G.dir, 2.2);
     cyl(rot, 0.7, base, hall, steel, 8); cyl(rot, 2.5, hall - 0.2, hall + 2.9, body); cyl(rot, 2.56, hall + 0.9, hall + 2.0, glass); cyl(rot, 2.8, hall + 2.9, hall + 3.2, roof);
-    // link back into the building
-    beam(G.pier.clone().addScaledVector(G.dir, -1.5).setY(hall), rot.clone().setY(hall), 3.2, 2.8, body);
+    // link back into the building: on along the walkway arm (or straight in through a wall). The building that is drawn can
+    // stand several metres off the mapped outline, and a link that stopped at the outline hung short of it (Paris 2F)
+    { let in_ = G.dir.clone().negate(), run = 1.5;
+      const inside = (q: THREE.Vector3) => polys.some(poly => { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a.z > q.z) !== (b.z > q.z) && q.x < ((b.x - a.x) * (q.z - a.z)) / (b.z - a.z) + a.x) c = !c; } return c; });
+      const back = Math.atan2(-G.dir.x, -G.dir.z);
+      for (let k = 0; k <= 10; k++) for (const s of k ? [-1, 1] : [1]) {
+        const u = new THREE.Vector3(Math.sin(back + s * k * 0.14), 0, Math.cos(back + s * k * 0.14)); let r = 0;
+        for (let m = 1; m <= 11; m++) { if (inside(G.pier.clone().addScaledVector(u, m))) r = m; else if (m > 1) break; }
+        if (r > run + 0.5) { run = r; in_ = u; }
+      }
+      const end = G.pier.clone().addScaledVector(in_, run).setY(hall);
+      beam(end, G.pier.clone().setY(hall), 3.2, 2.8, body); beam(G.pier.clone().addScaledVector(G.dir, -1.5).setY(hall), rot.clone().setY(hall), 3.2, 2.8, body); beam(end, G.pier.clone().setY(hall), 3.4, 0.18, roof, 2.8); }
     // tunnel: the fixed outer section, then the narrower inner one sliding out of it
     const t0 = rot.clone().addScaledVector(G.dir, 2.2).setY(hall); const t1 = G.cab.clone().addScaledVector(G.dir, -1.9).setY(sill);
     const mid = t0.clone().lerp(t1, 0.56), lap = t0.clone().lerp(t1, 0.5);

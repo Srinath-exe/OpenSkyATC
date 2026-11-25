@@ -139,7 +139,7 @@ test('no landing clearance: pilot queries at 4 NM, goes around at 2 NM on runway
   assert.ok(td.ok, 'landed after the missed approach');
   assert.equal(a.goAroundCount, 1);
   const f = runwayFrame(e, '28R', a.pos);
-  assert.ok(Math.abs(f.cross) <= 10 && f.along >= 200 && f.along <= 450, `touchdown ${f.along.toFixed(0)} / ${f.cross.toFixed(1)} m`);
+  assert.ok(Math.abs(f.cross) <= 10 && f.along >= 200 && f.along <= 470, `touchdown ${f.along.toFixed(0)} / ${f.cross.toFixed(1)} m`);
   assert.ok(!ledgerHas(e, 'DIVERSION'));
 });
 

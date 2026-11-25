@@ -1,4 +1,4 @@
-/* SKYCONTROL design system barrel. Import styling ONLY from here (00-MASTER-PLAN 2.1). */
+/* OpenATC design system barrel. Import styling ONLY from here (00-MASTER-PLAN 2.1). */
 export * from './icons'
 export * from './utils'
 

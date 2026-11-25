@@ -43,6 +43,7 @@ export interface RadarTheme {
   redBorder55: string;
   green: string;
   lime: string;
+  limeBright: string;
   lime50: string;
   limeFeather: string;
   blue: string;
@@ -57,7 +58,7 @@ const TOKENS: Record<Exclude<keyof RadarTheme, 'font'>, string> = {
   w25: '--w-25', w35: '--w-35', w45: '--w-45', w55: '--w-55', w70: '--w-70',
   orange: '--orange', orange40: '--orange-40', orange60: '--orange-60', orangeTint08: '--orange-tint-08', orangeTint20: '--orange-tint-20', orangeBorder: '--orange-border',
   red: '--red', red40: '--red-40', red85: '--red-85', redTint: '--red-tint', redTint08: '--red-tint-08', redBorder25: '--red-border-25', redBorder55: '--red-border-55',
-  green: '--green', lime: '--lime-marker', lime50: '--lime-50', limeFeather: '--lime-feather', blue: '--blue-marker',
+  green: '--green', lime: '--lime-marker', limeBright: '--lime-bright', lime50: '--lime-50', limeFeather: '--lime-feather', blue: '--blue-marker',
   dataBlock: '--data-block', handedBlock: '--tag-bg',
 };
 

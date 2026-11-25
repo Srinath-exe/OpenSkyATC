@@ -6,10 +6,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { fleetDress, fleetPick, fleetTexAlpha, fleetTexUrl, loadFleetIndex } from './fleet';
 
 const loader = new GLTFLoader();
 /** Bumped when the model files change (they are served immutable under this query string). */
-const MODEL_VERSION = '1';
 /** Nose wheel position as a fraction of the length behind the nose (models and the built-in silhouette agree). */
 export const NOSE_WHEEL = 0.12;
 /** Night amount shared by every liveried material (apron floodlighting lifts the paint so aircraft do not go black). */
@@ -35,19 +35,76 @@ function buildGear(bellyY: number, r: number): THREE.Group {
 }
 /** Gear down: on the ground, and airborne below 400 ft (the last stretch of the approach / just after lift-off). */
 export function setGear(model: THREE.Group, down: boolean): void { const gear = model.getObjectByName('gear'); if (gear && gear.visible !== down) gear.visible = down; }
-export function setModelNight(n: number): void { NIGHT.value = n; }
+export function setModelNight(n: number): void { NIGHT.value = n; WINDOWS.value = Math.max(0, Math.min(1, (n - 0.05) / 0.4)); }
+
+/* ── lit cabin windows ──────────────────────────────────────────────────────
+   A row of warm windows down each side of the fuselage, lit from dusk (setModelNight drives it). The fuselage is
+   measured once per model on a slice of the forward fuselage (ahead of the wings and engines): its half-width is the
+   radius, its top less the radius the centreline. The windows are a shader pattern on a thin strip just off the skin
+   at window height (a quarter radius above the centreline), additive, depth-tested so the far side is hidden by the
+   fuselage. Far away (pattern finer than a pixel) the row fades to an even glow instead of shimmering. */
+const WINDOWS = { value: 0 };
+export interface Cabin { yc: number; r: number }
+const DEFAULT_CABIN: Cabin = { yc: 0.115, r: 0.052 };
+export function cabinOf(t: THREE.Group, lift = 0): Cabin {
+  const key = `cabin${lift}`; if (t.userData[key]) return t.userData[key] as Cabin;
+  t.updateMatrixWorld(true);
+  const v = new THREE.Vector3(); let rx = 0, yhi = -Infinity, n = 0;
+  t.traverse((o) => {
+    const m = o as THREE.Mesh; if (!m.isMesh || !m.geometry?.attributes?.position) return;
+    for (let q: THREE.Object3D | null = o; q; q = q.parent) if (q.userData?.gear) return;
+    const pos = m.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      if (v.z > 0.02 && v.z < 0.12 && Math.abs(v.x) < 0.09) { rx = Math.max(rx, Math.abs(v.x)); yhi = Math.max(yhi, v.y); n++; }
+    }
+  });
+  const c = n > 20 && rx > 0.02 && rx < 0.09 ? { yc: yhi - rx + lift, r: rx } : { ...DEFAULT_CABIN, yc: DEFAULT_CABIN.yc + lift };
+  t.userData[key] = c; return c;
+}
+const WIN_VERT = /* glsl */ `varying vec2 vP; void main() { vP = vec2(position.z, uv.y); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+const WIN_FRAG = /* glsl */ `
+  uniform float uWin, uLen; varying vec2 vP;
+  void main() {
+    if (uWin < 0.01) discard;
+    float k = vP.x * uLen / 0.53;                                   // a window every 0.53 m
+    float f = fract(k), fw = fwidth(k);
+    float win = smoothstep(0.18, 0.26, f) * (1.0 - smoothstep(0.62, 0.70, f));
+    win = mix(win, 0.42, smoothstep(0.35, 0.9, fw));               // finer than a pixel: an even glow, no shimmer
+    float row = smoothstep(0.0, 0.25, vP.y) * (1.0 - smoothstep(0.75, 1.0, vP.y));
+    gl_FragColor = vec4(vec3(1.0, 0.7, 0.36) * win * row * uWin * 0.85, 1.0);   // warm cabin light
+  }`;
+function windowStrip(cabin: Cabin, lengthM: number): THREE.Mesh {
+  const h = cabin.r * 0.24, y = cabin.yc + cabin.r * 0.25;
+  const x = Math.sqrt(Math.max(0, cabin.r * cabin.r - (y - cabin.yc) ** 2)) + 0.0015;
+  const z0 = -0.02, z1 = 0.66, pos: number[] = [], uv: number[] = [];
+  for (const sx of [-1, 1]) {
+    const X = sx * x, q = [[X, y - h / 2, z0, 0], [X, y - h / 2, z1, 0], [X, y + h / 2, z1, 1], [X, y + h / 2, z0, 1]];
+    for (const i of sx < 0 ? [0, 1, 2, 0, 2, 3] : [0, 2, 1, 0, 3, 2]) { pos.push(q[i][0], q[i][1], q[i][2]); uv.push(q[i][2], q[i][3]); }
+  }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  const mat = new THREE.ShaderMaterial({ vertexShader: WIN_VERT, fragmentShader: WIN_FRAG, uniforms: { uWin: WINDOWS, uLen: { value: lengthM } },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+  const m = new THREE.Mesh(geo, mat); m.name = 'windows'; m.frustumCulled = false; m.renderOrder = 2;
+  return m;
+}
 const cache = new Map<string, Promise<THREE.Group | null>>();
 if (typeof window !== 'undefined') (window as unknown as { __acModels?: unknown }).__acModels = { cache, matSignature: (m: THREE.Material) => matSignature(m) };   // debugging hook
 
-/** Normalised template for a type (unit-length: 1 m nose-to-tail — `instantiate` scales it), or null when no model exists. */
-export function loadAircraftModel(type: string): Promise<THREE.Group | null> {
-  const key = type.toUpperCase();
-  let p = cache.get(key);
-  if (!p) {
-    p = loader.loadAsync(`/models/aircraft/${key}.glb?v=${MODEL_VERSION}`).then((gltf) => { const w = normalise(gltf.scene, 1, key); return w; }).catch(() => null);
-    cache.set(key, p);
-  }
-  return p;
+/** Normalised template for a flight (unit-length: 1 m nose-to-tail — `instantiate` scales it), or null when no model
+ *  has arrived: always a model of the textured fleet (fleet.ts), in the airline's livery or plain. The old community
+ *  models are not used. */
+export function loadAircraftModel(type: string, callsign?: string): Promise<THREE.Group | null> {
+  return loadFleetIndex().then(() => {
+    const pick = fleetPick(type, callsign);
+    if (!pick) return null;
+    let p = cache.get(pick.key);
+    if (!p) {
+      p = loader.loadAsync(pick.glb).then((gltf) => normalise(gltf.scene, 1, type.toUpperCase(), pick.key)).catch(() => { setTimeout(() => cache.delete(pick.key), 8000); return null; });   // (a failed download is tried again)
+      cache.set(pick.key, p);
+    }
+    return p;
+  });
 }
 
 /** Per-aircraft instance: a clone of the template scaled to the aircraft's real length, painted in the airline's
@@ -55,6 +112,9 @@ export function loadAircraftModel(type: string): Promise<THREE.Group | null> {
 export function instantiate(template: THREE.Group, lengthM: number, callsign?: string): THREE.Group {
   const g = template.clone(true);
   g.scale.setScalar(lengthM);
+  // which airframe this is: the 3D file, or the community model of a type (light positions are measured per airframe)
+  g.userData.airframe = (template.userData.fleet as string | undefined) ?? `community:${template.userData.type as string}`;
+  if (template.userData.fleet) { dressFleet(g, template.userData.fleet as string, callsign); const cab = cabinOf(template); g.userData.cabin = cab; g.add(windowStrip(cab, lengthM)); return g; }
   const livery = liveryFor(callsign ?? '');
   const frame = (template.userData.frame as Frame | undefined) ?? { yBot: 0.02, yTop: 0.12, r: 0.05, maxAx: 0.45, finTop: 0.25, finZ0: 0.3, finZ1: 0.5, finTipZ0: 0.45 };
   // landing gear: the community models are in-flight airframes resting on their bellies / nacelles. The airframe is
@@ -67,7 +127,38 @@ export function instantiate(template: THREE.Group, lengthM: number, callsign?: s
     m.material = Array.isArray(m.material) ? m.material.map((x) => paint(x.clone(), livery, frame, part)) : paint(m.material.clone(), livery, frame, part);
   });
   g.add(buildGear(frame.yBot + GEAR_LIFT, frame.r));
+  const cab = cabinOf(template, GEAR_LIFT); g.userData.cabin = cab; g.add(windowStrip(cab, lengthM));
   return g;
+}
+
+/** A fleet model in its airline's real livery: the textures named by each material ("tex:<file>"), cloned per instance
+ *  for tint(); the model's own gear stays in its "gear" node (setGear hides it in the air). */
+const texCache = new Map<string, THREE.Texture>();
+const texLoader = new THREE.TextureLoader();
+function fleetTexture(h: string): THREE.Texture {
+  let t = texCache.get(h);
+  if (!t) { t = texLoader.load(fleetTexUrl(h)); t.flipY = false; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; texCache.set(h, t); }
+  return t;
+}
+function dressFleet(g: THREE.Group, key: string, callsign?: string): void {
+  const pick = fleetDress(key, callsign);
+  g.traverse((o) => {
+    const m = o as THREE.Mesh; if (!m.isMesh) return;
+    const one = (mat: THREE.Material) => {
+      const c = mat.clone() as THREE.MeshStandardMaterial;
+      const file = c.name.startsWith('tex:') ? c.name.slice(4) : null;
+      const h = file && pick ? pick.tex[file] : null;
+      if (h) { c.map = fleetTexture(h); if (fleetTexAlpha(h)) { c.alphaTest = 0.5; c.transparent = false; } c.needsUpdate = true; }
+      // the same night lift as the painted models: floodlit aprons keep the livery readable
+      c.onBeforeCompile = (sh) => {
+        sh.uniforms.uNight = NIGHT;
+        sh.fragmentShader = 'uniform float uNight;\n' + sh.fragmentShader.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\nreflectedLight.indirectDiffuse += diffuseColor.rgb * uNight * vec3(0.30, 0.27, 0.22);');
+      };
+      c.customProgramCacheKey = () => 'fleet-night';
+      return c;
+    };
+    m.material = Array.isArray(m.material) ? m.material.map(one) : one(m.material);
+  });
 }
 
 /* ── liveries ────────────────────────────────────────────────────────────────
@@ -414,7 +505,20 @@ export function tint(group: THREE.Group, color: THREE.Color | null): void {
   });
 }
 
-function normalise(scene: THREE.Group, lengthM: number, type = ''): THREE.Group {
+/** The picked aircraft in its own daylight: its livery shown at close to full strength whatever the light on the field
+ *  (at night it stands out against the dark; by day it is barely different). Undone by tint(group, null). */
+export function litAs(group: THREE.Group, on: boolean): void {
+  const k = 0.12 + 0.5 * Math.max(0, Math.min(1, NIGHT.value));
+  group.traverse((o) => {
+    const m = o as THREE.Mesh; if (!m.isMesh || m.userData.gear) return;
+    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+      const s = mat as THREE.MeshStandardMaterial; if (!('emissive' in s)) continue;
+      if (on) { if (s.map && s.emissiveMap !== s.map && !s.emissiveMap) { s.emissiveMap = s.map; s.needsUpdate = true; } s.emissive.setHex(0xfff4e6).lerp(new THREE.Color(0xffffff), 0.5); if (!s.emissiveMap) s.emissive.multiply(s.color); s.emissiveIntensity = k; }
+    }
+  });
+}
+
+function normalise(scene: THREE.Group, lengthM: number, type = '', fleetKey = ''): THREE.Group {
   scene.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(scene);
   const size = new THREE.Vector3(); box.getSize(size);
@@ -464,9 +568,15 @@ function normalise(scene: THREE.Group, lengthM: number, type = ''): THREE.Group 
     // one matte finish for every part (the exporters' per-part gloss is invisible at map scale, and identical materials
     // let mergeParts() collapse the parts into fewer draw calls); fins / control surfaces are single-sided sheets in
     // several models, hence DoubleSide
-    for (const mat of mats) { const s = mat as THREE.MeshStandardMaterial; if ('metalness' in s) { s.metalness = 0.1; s.roughness = 0.8; } s.side = THREE.DoubleSide; }
+    for (const mat of mats) { const s = mat as THREE.MeshStandardMaterial; if ('metalness' in s) { s.metalness = fleetKey ? 0.15 : 0.1; s.roughness = fleetKey ? 0.55 : 0.8; } s.side = THREE.DoubleSide; }
   });
   wrap.userData.type = type;
+  if (fleetKey) {
+    // the fleet model's own gear: keep it a separate node (not merged into the airframe) so setGear can hide it
+    wrap.userData.fleet = fleetKey;
+    const gear = scene.getObjectByName('gear');
+    if (gear) gear.traverse((o) => { o.userData.gear = true; });
+  }
   classify(wrap);
   mergeParts(wrap);
   return wrap;
@@ -481,7 +591,8 @@ function normalise(scene: THREE.Group, lengthM: number, type = ''): THREE.Group 
 function matSignature(mat: THREE.Material): string {
   const m = mat as THREE.MeshStandardMaterial;
   const tex = (t: THREE.Texture | null | undefined) => t ? t.uuid : '-';
-  return [m.type, tex(m.map), tex(m.emissiveMap), tex(m.normalMap), tex(m.roughnessMap), tex(m.metalnessMap), m.color?.getHex(), m.emissive?.getHex(), m.emissiveIntensity, m.metalness, m.roughness,
+  return [m.name?.startsWith('tex:') ? m.name : '', m.type, tex(m.map),   // (a fleet material's name is its livery texture, put on later)
+    tex(m.emissiveMap), tex(m.normalMap), tex(m.roughnessMap), tex(m.metalnessMap), m.color?.getHex(), m.emissive?.getHex(), m.emissiveIntensity, m.metalness, m.roughness,
     m.transparent, m.opacity, m.alphaTest, m.side, m.blending, m.depthWrite, m.vertexColors].join('|');
 }
 function mergeParts(wrap: THREE.Group): void {
@@ -489,7 +600,7 @@ function mergeParts(wrap: THREE.Group): void {
   const groups = new Map<string, { mat: THREE.Material; part: number; meshes: THREE.Mesh[] }>();
   wrap.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || Array.isArray(m.material) || !m.geometry?.attributes?.position) return;
+    if (!m.isMesh || (m as THREE.InstancedMesh).isInstancedMesh || Array.isArray(m.material) || !m.geometry?.attributes?.position || m.userData.gear) return;
     const part = (m.userData.part as number) ?? 0; const key = `${matSignature(m.material as THREE.Material)}:${part}`;
     let g = groups.get(key); if (!g) { g = { mat: m.material as THREE.Material, part, meshes: [] }; groups.set(key, g); }
     g.meshes.push(m);

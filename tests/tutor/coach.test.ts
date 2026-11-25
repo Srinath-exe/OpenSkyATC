@@ -17,6 +17,7 @@ import type { SimEvent } from '../../src/lib/sim/types';
 import { sim } from '../../src/components/atc/simStore';
 import { coach } from '../../src/game/Tutorial/runner';
 import { CHAPTERS, chaptersOf, TABS } from '../../src/game/Tutorial/lessons';
+import { STEPS } from '../../src/game/Tutorial/course';
 import { markListening, TUTOR_EVENT } from '../../src/components/atc/WorldMap/tutor';
 
 // the page's window: events for the map cues; the coach's timers are driven by hand below
@@ -73,7 +74,7 @@ async function play(ch: Chapter, how: string, prev: { cs: string; x: number; y: 
     if (a0.phase === 'parked' && prev.phase !== 'parked') run.issues.push(`${cs} is back on its stand`);
     if (jump > 60) run.issues.push(`${cs} jumped ${Math.round(jump)} m from where the last mission left it (not continued)`);
   }
-  const t0 = e.time; const said = new Set<string>();
+  const t0 = e.time; const said = new Set<string>(); const metAt = new Map<string, number>(); let wallS = 0;
   await new Promise((r) => setTimeout(r, 700));   // the map cues go out on the page's timers
   if (ch.cues && !cues.some((c) => c.kind === 'camera')) run.issues.push('no camera cue for the map');
   while (coach.state.stage !== 'done' && e.time - t0 < BUDGET_S) {
@@ -83,10 +84,13 @@ async function play(ch: Chapter, how: string, prev: { cs: string; x: number; y: 
       const r = sim.command(line);
       run.calls.push(`${line}${r.ok ? '' : ` -> REFUSED ${r.code} ${r.reason ?? ''}`}`);
       if (!r.ok) run.issues.push(`call refused: "${line}" (${r.code} ${r.reason ?? ''})`);
+      run.calls[run.calls.length - 1] += ` @${Math.round(e.time - t0)}s`;
     }
-    wall(0.5);
+    for (const id of coach.state.met) if (!metAt.has(id)) metAt.set(id, Math.round(e.time - t0));
+    wall(0.5); wallS += 0.5;
   }
   run.simS = Math.round(e.time - t0);
+  if (process.env.TIMELINE) console.log(`  ${ch.id} (${wallS}s real): calls ${run.calls.join('; ')} | met ${[...metAt].map(([k, v]) => `${k}@${v}s`).join(' ')}`);
   if (coach.state.stage !== 'done') {
     const a = e.find(cs); const cur = coach.current();
     run.issues.push(`not finished after ${run.simS} s: waiting on "${cur?.title ?? '?'}" [${a ? `${a.phase} ${Math.round(a.speed)} kt ${a.holdShortRunway ?? ''} ${a.trafficHold ? 'held: ' + ((e as unknown as { sc(a: unknown): { holdReason: string | null } }).sc(a).holdReason ?? '') : ''}` : 'gone'}]`);
@@ -100,7 +104,22 @@ async function play(ch: Chapter, how: string, prev: { cs: string; x: number; y: 
 }
 const report = (runs: Run[]) => console.log(runs.map((r) => `${r.issues.length ? 'FAIL' : ' ok '} ${r.id.padEnd(12)} ${r.how.padEnd(9)} ${String(r.simS).padStart(4)} s  ${r.calls.length} calls${r.issues.length ? '\n       - ' + r.issues.join('\n       - ') : ''}`).join('\n'));
 
-const tabs = (process.env.TAB ? [process.env.TAB] : TABS.map((t) => t.id)) as Tab[];
+// the course (course.ts): its missions in order, each carrying on from the last, the way /learn plays them
+if (!process.env.TAB || process.env.TAB === 'course') test(`course: every mission in order (${FPS} fps)`, async () => {
+  await boot('ground');
+  const runs: Run[] = []; let prev: { cs: string; x: number; y: number; phase: string } | null = null;
+  for (const st of STEPS.filter((x) => x.mission)) {
+    const ch = CHAPTERS.find((c) => c.id === st.mission)!;
+    coach.open(ch.id, { story: false, fresh: st.fresh });
+    const r = await play(ch, runs.length ? 'continued' : 'first', ch.tab === 'ground' || ch.id === 't-follow' ? prev : null); runs.push(r);
+    const live = (coach as unknown as { live: { ctx: { cs: string } } | null }).live; const a = live ? sim.engine!.find(live.ctx.cs) : null;
+    prev = a ? { cs: a.callsign, x: a.pos.x, y: a.pos.y, phase: a.phase } : null;
+  }
+  coach.dispose(); report(runs);
+  assert.deepEqual(runs.filter((r) => r.issues.length).map((r) => r.id), [], 'missions with problems (see the report above)');
+});
+
+const tabs = (process.env.TAB === 'course' ? [] : process.env.TAB ? [process.env.TAB] : TABS.map((t) => t.id)) as Tab[];
 for (const tab of tabs) {
   test(`${tab}: the whole track in one go, each mission carrying on from the last (${FPS} fps)`, async () => {
     await boot(tab);

@@ -64,7 +64,9 @@ export class HomePage {
   /** Open `/` and wait for hydration (`page-home[data-ready="true"]`). */
   async goto(opts: HomeGotoOptions = {}): Promise<void> {
     if (opts.testMode) await this.installStartConfigPatch(opts.testMode);
-    await this.page.goto('/start');
+    // a returning player: the first-run set-up (model download, microphone) is done
+    await this.page.addInitScript(() => { try { localStorage.setItem('skycontrol_setup_done', '1'); } catch { /* storage disabled */ } });
+    await this.page.goto('/start?icao=KSFO');   // the sandbox lists several airports: straight to SFO's set-up
     await expect(this.root()).toHaveAttribute('data-ready', 'true');
   }
 

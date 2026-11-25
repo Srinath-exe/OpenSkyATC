@@ -9,6 +9,8 @@
   (a short grace period lets the recogniser flush the last words).
   `server`: src/lib/voice/asr-server.ts (Parakeet, then Whisper, on this site's server, biased with the callsigns on frequency).
 */
+import { sttDir } from '../models/manager';
+import { micConstraints } from '@/lib/audioDevices';
 import { createMicCapture, isSilent } from './asr-capture';
 import { silentMessage } from './asr-server';
 import type { Understood } from './asr-server';
@@ -19,6 +21,8 @@ export interface Recognizer {
   /** Stop listening; resolves with the final transcript ('' when nothing was heard). */
   stop(): Promise<string>;
   onPartial: ((text: string) => void) | null;
+  /** The words heard so far while the player is still talking (a live transcript, not a status line). */
+  onLive?: ((text: string) => void) | null;
   onError: ((message: string) => void) | null;
   /** n-best of the last stop(), best first (engines that give more than one guess; src/lib/voice/asr-nbest.ts). */
   alternatives?: string[];
@@ -79,7 +83,8 @@ export function createLocalRecognizer(onStatus?: (s: LocalStatus) => void, model
   const emit = (p: Partial<LocalStatus>) => { Object.assign(status, p); onStatus?.({ ...status }); };
   const asked = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('stt-model') : null;
   const pick = asked && (['base', 'tiny', 'whistle', 'whisper-tiny.en', 'whisper-base.en'].includes(asked) || /^atc-[a-z0-9._-]+$/i.test(asked)) ? asked : model;   // atc-<name>: a model this site hosts (/models/stt/<name>/)
-  const worker = new Worker(`/voice/stt-worker.js?model=${pick}`, { type: 'module' });
+  // our model (ATC-ASR) unless the URL asks for one of the older test models
+  const worker = asked ? new Worker(`/voice/stt-worker.js?model=${pick}`, { type: 'module' }) : new Worker(`/voice/atc-asr-worker.js?dir=${encodeURIComponent(sttDir())}`, { type: 'module' });
   const files = new Map<string, { loaded: number; total: number }>();
   const pending = new Map<number, (text: string) => void>();
   let nextId = 1;
@@ -90,13 +95,23 @@ export function createLocalRecognizer(onStatus?: (s: LocalStatus) => void, model
       let l = 0, t = 0; files.forEach((f) => { l += f.loaded; t += f.total; });
       emit({ state: 'loading', progress: t ? l / t : 0 });
     } else if (m.type === 'ready') emit({ state: 'ready', progress: 1, device: m.device, message: '' });
+    else if (m.type === 'result' && live.has(m.id)) { live.delete(m.id); busy = false; if (recording && m.text) self.onLive?.(m.text); }
     else if (m.type === 'result') { emit({ lastMs: m.ms, device: m.device }); self.alternatives = Array.isArray(m.alternatives) ? m.alternatives : m.text ? [m.text] : []; pending.get(m.id)?.(m.text); pending.delete(m.id); }
+    else if (m.type === 'error' && live.has(m.id)) { live.delete(m.id); busy = false; }
     else if (m.type === 'error') { emit({ state: 'error', message: m.message }); self.onError?.(`On-device speech model: ${m.message}`); if (m.id) { pending.get(m.id)?.(''); pending.delete(m.id); } }
   };
   emit({ state: 'loading' });
   worker.postMessage({ type: 'load' });
   const mic = createMicCapture();
   let names: string[] = [];
+  // the live transcript: while the key is held, what was said so far is decoded again every ~0.7 s (one at a time)
+  const live = new Set<number>(); let busy = false, recording = false, liveTimer: number | null = null
+  const liveTick = () => {
+    if (!recording || busy || status.state !== 'ready' || !self.onLive) return
+    const audio = mic.peek(); if (!audio || audio.length < 16000 * 0.5) return
+    const id = nextId++; live.add(id); busy = true
+    worker.postMessage({ type: 'transcribe', id, audio, names }, [audio.buffer])
+  }
 
   const self: Recognizer = {
     kind: 'local',
@@ -106,11 +121,13 @@ export function createLocalRecognizer(onStatus?: (s: LocalStatus) => void, model
     setHints(n: string[]) { names = n.slice(0, 40); },
     start() {
       self.alternatives = [];
+      recording = true; busy = false; if (liveTimer) window.clearInterval(liveTimer); liveTimer = window.setInterval(liveTick, 700)
       if (!mic.isOpen) self.onPartial?.('Microphone starting…');
       mic.start().then(() => { self.onPartial?.(status.state === 'ready' ? 'Listening (on-device)…' : `Listening… voice model ${Math.round(status.progress * 100)}%`); })
         .catch((err) => { self.onError?.(/denied|not ?allowed/i.test(String(err)) ? 'Microphone access was blocked. Allow it in the browser to talk.' : `Microphone: ${String(err)}`); });
     },
     async stop() {
+      recording = false; if (liveTimer) { window.clearInterval(liveTimer); liveTimer = null }
       const audio = await mic.stop();
       if (audio.length < 16000 * 0.25) return '';
       if (isSilent(audio)) { self.onError?.(silentMessage()); return ''; }
@@ -168,7 +185,7 @@ export function createBrowserRecognizer(lang = 'en-US'): Recognizer | null {
   const lineOk = typeof AudioContext !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
   const openLine = async (): Promise<MediaStreamTrack> => {
     if (line && line.track.readyState === 'live') { await line.ctx.resume(); return line.track; }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints({ echoCancellation: true, noiseSuppression: true, autoGainControl: true }) });
     const ctx = new AudioContext();
     const delay = ctx.createDelay(1); delay.delayTime.value = PREROLL_S;
     const dst = ctx.createMediaStreamDestination();
@@ -196,7 +213,7 @@ export function createBrowserRecognizer(lang = 'en-US'): Recognizer | null {
         const r = e.results[i];
         if (r.isFinal) u.finals[i] = Array.from({ length: r.length }, (_, k) => r[k].transcript.trim()); else u.interim += r[0].transcript;
       }
-      if (u === utt) self.onPartial?.(joined(u, 0));
+      if (u === utt) { const t = joined(u, 0); self.onPartial?.(t); self.onLive?.(t); }
     };
     cur.onaudiostart = () => { if (u === utt && !u.finals.length && !u.interim) self.onPartial?.('Listening…'); };
     cur.onerror = (e) => {

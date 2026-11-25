@@ -14,7 +14,7 @@ test('observation: header, open request with its answers, aircraft line with the
   runUntil(e, () => a.requests.length > 0, 120);
   const obs = buildObservation(e, { position: 'ground', vocabulary: true, radio: [{ who: 'SYS', text: 'boot', at: 0 }, { who: 'PILOT', callsign: 'AFR851', text: 'request pushback', at: e.time }] });
   const t = obs.text;
-  assert.match(t, /^SKYCONTROL KSFO · you are GROUND · sim \d\d:\d\d:\d\d/m);
+  assert.match(t, /^OpenATC KSFO · you are GROUND · sim \d\d:\d\d:\d\d/m);
   assert.match(t, /^WX wind \d{3}\/\d+/m);
   assert.match(t, /^RUNWAYS dep .*28L/m);
   assert.match(t, /^TAXIWAYS .* A .* B /m, 'taxiway vocabulary on request');

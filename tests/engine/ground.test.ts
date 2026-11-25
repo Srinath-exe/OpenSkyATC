@@ -50,9 +50,9 @@ test('departure lifecycle at KSFO: parked -> startup -> pushback -> taxi with tw
   assert.equal(a.pushback.stage, 'tug_disconnect');
   assert.ok(maxPushKt <= PUSHBACK_KT + 0.05, `push speed ${maxPushKt.toFixed(2)} kt`);
   const pushedM = dist(p0, a.pos);
-  assert.ok(pushedM >= 30 && pushedM <= 150, `pushed ${pushedM.toFixed(0)} m`);
+  assert.ok(pushedM >= 30 && pushedM <= 260, `pushed ${pushedM.toFixed(0)} m`);   // a stand at the head of an alley is pushed down it to the cross lane
   const pushS = e.time - t0;
-  assert.ok(pushS >= 20 && pushS <= 120, `push took ${pushS.toFixed(0)} s`);
+  assert.ok(pushS >= 20 && pushS <= 200, `push took ${pushS.toFixed(0)} s`);
   const discS = a.pushback.stageUntil - e.time;
   assert.ok(discS >= 19 && discS <= 31, `tug disconnect ${discS.toFixed(0)} s`);
   assert.ok(facingTaxiway(e, a), `nose (${a.heading.toFixed(0)}) aligned with a taxiway edge at the push end`);
@@ -85,8 +85,8 @@ test('departure lifecycle at KSFO: parked -> startup -> pushback -> taxi with tw
   for (const h of holds) assert.ok(e.isHoldNodeForRunway(h.nodeId, h.runway), `${h.nodeId} is a hold node for ${h.runway}`);
   assert.equal(a.holdReleased, false);
   assert.equal(a.path!.holdAt, holds[0].at);
-  // FAA airport: the implicit hold-short is scored TAXI_INCOMPLETE (03 A1)
-  assert.ok(ledgerHas(e, 'TAXI_INCOMPLETE', 'UAL5'));
+  // the implicit hold-short is not marked against the controller (user decision 2026-11-23)
+  assert.ok(!ledgerHas(e, 'TAXI_INCOMPLETE', 'UAL5'));
   // a hold-short for a runway that is not on the route is queried, never executed (B4)
   const hs = cmd(e, makeAst('holdShort', 'UAL5', { of: { kind: 'runway', runway: '28R' } }));
   assert.equal(hs.code, 'queried');

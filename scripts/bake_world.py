@@ -84,7 +84,7 @@ def overpass(query, tries=3):
     for i in range(tries * len(mirrors)):
         url = mirrors[i % len(mirrors)]
         try:
-            r = requests.post(url, data={'data': query}, timeout=240, headers={'User-Agent': 'skycontrol-bake/1.0 (atc sim; contact: dev@skycontrol.local)'})
+            r = requests.post(url, data={'data': query}, timeout=240, headers={'User-Agent': 'openatc-bake/1.0 (atc sim; contact: dev@openatc.local)'})
             status = r.status_code
             if r.status_code == 200 and r.text.lstrip().startswith('{'):
                 open(cf, 'w').write(r.text)

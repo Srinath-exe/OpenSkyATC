@@ -5,6 +5,7 @@
   REQ chip with age, pending-command dot, alt/spd/hdg for airborne aircraft, emergency band, conflict tint,
   clearance boxes (P T W O F / I L E F) that open the matching action, resume-draft chip, archive.
 */
+import { useAircraftThumb } from '@/components/atc/aircraftThumb'
 import * as React from 'react'
 import styles from './StripBay.module.css'
 import { Pill, Icon, IconX, IconPlaneLanding, IconPlaneTakeoff, cx } from '@/design'
@@ -91,7 +92,8 @@ export const StripCard = React.memo(function StripCard(p: StripCardProps) {
   const pendingText = pending ? a.pendingCmds.map((c) => (c.ast ? describe(c.ast) : c.kind)).join(', ') : ''
   const distNM = !dep && air && a.plan.runway ? sim.engine?.distToThresholdNM(a, a.plan.runway) ?? null : null
 
-  const select = () => sim.select(a.id)
+  const thumb = useAircraftThumb(a.perf.icaoCode, a.callsign)
+  const select = () => { sim.select(a.id); sim.centerOn(a.id) }   // and take the map to it
   const onKey = (e: React.KeyboardEvent) => {
     if (e.target !== e.currentTarget) return
     if (e.key === 'Enter') { e.preventDefault(); select(); requestOpenAction({ aircraftId: a.id, actionId: null }) }
@@ -138,6 +140,7 @@ export const StripCard = React.memo(function StripCard(p: StripCardProps) {
       aria-label={`${a.callsign} ${a.perf.icaoCode} ${label.long}`}
     >
       <span className={styles.bar} data-tone={tone} data-req={reqOpen ? 'true' : undefined} aria-hidden="true" />
+      {thumb ? <img className={styles.thumb} src={thumb} alt="" aria-hidden="true" data-testid="strip-thumb" draggable={false} /> : null}
       {emergency ? (
         <div className={styles.emergBand} data-testid={`strip-${a.callsign}-emerg`} data-level={emergency.level}>
           <Icon name="siren" size={12} />

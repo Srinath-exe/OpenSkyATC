@@ -1,4 +1,4 @@
-# SKYCONTROL design system (`src/design`)
+# OpenATC design system (`src/design`)
 
 The only styling source for `src/game` and `src/app` (00-MASTER-PLAN §2.1). Implements `docs/spec/01-DESIGN-SYSTEM.md` 1:1
 (base + critic addendum; A1 resolutions win). No Tailwind, no inline colour literals: CSS Modules + the tokens below.

@@ -36,9 +36,17 @@ function airportLists(icao: string) {
   return lists.get(icao) ?? {};
 }
 
+// What the game knows of each aircraft besides its callsign: without the plan "taxi via K, hold short of E" has no destination
+// and no step-by-step taxi line, right or wrong, can ever parse (it scored 0 of 48 that way until 2026-11-23).
+function aircraftOf(l: string) {
+  const w = l.split(' '), i = w.findIndex((x) => x === 'ARR' || x === 'DEP'); if (i < 0) return { callsign: w[0] };
+  const runway = w.slice(i + 1).find((x) => /^\d{1,2}[LRC]?$/.test(x)) ?? null;
+  return { callsign: w[0], plan: { kind: w[i] === 'ARR' ? 'arrival' as const : 'departure' as const, runway, gateRef: w[i] === 'ARR' ? 'STAND' : null } };
+}
+
 function parseCtxOf(ctx: string, icao: string): { pctx: ParseCtx; callsigns: string[] } {
-  const callsigns = ctx.split('\n').slice(1).filter((l) => l.trim()).map((l) => l.split(' ')[0]);
-  return { pctx: { aircraft: callsigns.map((callsign) => ({ callsign })), ...(icao && /^[A-Z]{4}$/.test(icao) ? airportLists(icao) : {}) }, callsigns };
+  const aircraft = ctx.split('\n').slice(1).filter((l) => l.trim()).map(aircraftOf); const callsigns = aircraft.map((a) => a.callsign);
+  return { pctx: { aircraft, ...(icao && /^[A-Z]{4}$/.test(icao) ? airportLists(icao) : {}) }, callsigns };
 }
 
 async function chain(rowsFile: string, modelDir: string) {

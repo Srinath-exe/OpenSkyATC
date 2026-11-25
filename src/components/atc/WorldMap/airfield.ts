@@ -34,28 +34,38 @@ const APPROACH_LIGHTS: Record<string, string[]> = { KSFO: ['28L', '28R', '19L'] 
 export interface Light { p: THREE.Vector3; color: THREE.Color; color2?: THREE.Color; dir?: THREE.Vector3; size: number; day?: number; flash?: number; seq?: number }
 const LIGHT_VERT = /* glsl */ `
   attribute vec3 aColor; attribute vec3 color2; attribute vec2 aDir; attribute vec4 aInfo;   // size m, day alpha, flash phase (+1, 0 = steady), sequence (+1)
-  uniform float uScale, uNight, uTime, uMinPx;
-  varying vec3 vCol; varying float vAlpha;
+  uniform float uScale, uNight, uTime, uMinPx, uFar;   // uFar: 0 near .. 1 zoomed right out (Mapbox map only; 0 here)
+  uniform vec2 uVP;   // Mapbox map: the viewport in pixels (its camera has no view space to measure distance in); 0 here
+  varying vec3 vCol; varying float vAlpha; varying float vHalo;
   void main() {
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vec4 mv = viewMatrix * wp;
     float d = max(1.0, -mv.z);
     float px = aInfo.x * uScale / d;
-    gl_PointSize = clamp(px, uMinPx, uMinPx * 4.2);
+    if (uVP.x > 0.0) {
+      // the fitting's size on screen from the projection itself: its offsets along x, y and z projected, the largest
+      // (one of them always faces the camera) - a light 3 km off is a few pixels, not as big as one beside the camera
+      vec4 c0 = projectionMatrix * mv; vec2 n0 = c0.xy / c0.w;
+      vec4 cx = projectionMatrix * (mv + viewMatrix * vec4(aInfo.x, 0.0, 0.0, 0.0)); vec4 cy = projectionMatrix * (mv + viewMatrix * vec4(0.0, aInfo.x, 0.0, 0.0)); vec4 cz = projectionMatrix * (mv + viewMatrix * vec4(0.0, 0.0, aInfo.x, 0.0));
+      px = max(length((cx.xy / cx.w - n0) * uVP), max(length((cy.xy / cy.w - n0) * uVP), length((cz.xy / cz.w - n0) * uVP))) * 0.5;
+    }
+    gl_PointSize = clamp(px, uMinPx, uMinPx * 4.2) * mix(1.0, 0.4, uFar);   // zoomed out: smaller, dimmer, little halo -
+    vHalo = 1.0 - 0.9 * uFar;                                                 // hundreds of full-size glows ran together
     vec3 col = aColor;
     if (dot(aDir, aDir) > 0.01) col = dot(cameraPosition.xz - wp.xz, aDir) < 0.0 ? aColor : color2;
     float a = mix(aInfo.y, 1.0, uNight) * (0.35 + 0.65 * sqrt(clamp(px / uMinPx, 0.0, 1.0))) * smoothstep(0.0, 0.25, px / uMinPx);
     if (aInfo.z > 0.5) a *= step(0.5, fract(uTime * 0.85 + aInfo.z));                          // alternating guard lights
     if (aInfo.w > 0.5) { float ph = fract(uTime * 2.0 - (aInfo.w - 1.0) / 16.0); a *= smoothstep(0.12, 0.0, ph) * 1.6; }   // the rabbit
+    a *= mix(1.0, 0.5, uFar);
     vCol = col; vAlpha = a * step(0.02, dot(col, col));
     gl_Position = vAlpha < 0.004 ? vec4(2.0, 2.0, 2.0, 1.0) : projectionMatrix * mv;
   }`;
 const LIGHT_FRAG = /* glsl */ `
-  varying vec3 vCol; varying float vAlpha;
+  varying vec3 vCol; varying float vAlpha; varying float vHalo;
   void main() {
     float r = length(gl_PointCoord - 0.5) * 2.0;
     float core = 1.0 - smoothstep(0.25, 0.6, r), halo = 1.0 - smoothstep(0.3, 1.0, r);
-    gl_FragColor = vec4(vCol * (0.7 * halo + 1.6 * core) * vAlpha, 1.0);
+    gl_FragColor = vec4(vCol * (0.7 * halo * vHalo + 1.6 * core) * vAlpha, 1.0);
   }`;
 export interface LightsHandle { points: THREE.Points; setNight(n: number): void }
 export function lightPoints(lights: Light[]): LightsHandle {
@@ -69,7 +79,7 @@ export function lightPoints(lights: Light[]): LightsHandle {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('aColor', new THREE.BufferAttribute(c1, 3)); geo.setAttribute('color2', new THREE.BufferAttribute(c2, 3));
   geo.setAttribute('aDir', new THREE.BufferAttribute(dir, 2)); geo.setAttribute('aInfo', new THREE.BufferAttribute(info, 4));
-  const uniforms = { uScale: { value: 1000 }, uNight: { value: 0 }, uTime: { value: 0 }, uMinPx: { value: 2.2 } };
+  const uniforms = { uScale: { value: 1000 }, uNight: { value: 0 }, uTime: { value: 0 }, uMinPx: { value: 2.2 }, uFar: { value: 0 }, uVP: { value: new THREE.Vector2(0, 0) } };
   const mat = new THREE.ShaderMaterial({ uniforms, vertexShader: LIGHT_VERT, fragmentShader: LIGHT_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
   const points = new THREE.Points(geo, mat); points.frustumCulled = false; points.renderOrder = 8;
   const size = new THREE.Vector2(); const t0 = performance.now();
@@ -153,7 +163,7 @@ export function apronLanes(world: World, air: OsmAirport): Set<string> {
   return lanes;
 }
 
-export function buildAirport(world: World, air: OsmAirport, fades: Fade[], night: NightHandle[] = []): THREE.Group {
+export function buildAirport(world: World, air: OsmAirport, fades: Fade[], night: NightHandle[] = [], opts: { /** Every taxi line gets its asphalt strip: the caller lays the aprons over the lanes itself (groundPlan.ts). */ allStrips?: boolean } = {}): THREE.Group {
   const g = new THREE.Group(); g.name = 'airport';
   const c = world.toLocal(air.center.lng, air.center.lat);
   const base = world.heightAt(c.x, c.y);
@@ -172,7 +182,7 @@ export function buildAirport(world: World, air: OsmAirport, fades: Fade[], night
     if (pts.length < 3) continue;
     apronPolys.push(pts); apronGeos.push(polygonGeo(pts, base + 0.6));
   }
-  if (apronGeos.length) { const m = new THREE.Mesh(mergeGeometries(apronGeos), concrete); m.renderOrder = 1; g.add(m); }
+  if (apronGeos.length) { const m = new THREE.Mesh(mergeGeometries(apronGeos), concrete); m.name = 'aprons'; m.renderOrder = 1; g.add(m); }
   const lanes = apronLanes(world, air);
   /** On an apron: inside a mapped apron polygon, or a lane with stands along it (the same rule the stand pads use). */
   const onApron = (p: { x: number; y: number }) => apronPolys.some(poly => inPoly(p, poly));
@@ -194,7 +204,7 @@ export function buildAirport(world: World, air: OsmAirport, fades: Fade[], night
   for (const sg of segs) {
     const va = toV3(sg.a.x, sg.a.y, base + 0.66), vb = toV3(sg.b.x, sg.b.y, base + 0.66);
     const d = vb.clone().sub(va); const L = d.length(); if (L < 0.05) continue; d.normalize();
-    if (!sg.apron) {
+    if (!sg.apron || opts.allStrips) {
       twyGeos.push(ribbon(va, vb, TAXIWAY_WIDTH));
       shGeos.push(ribbon(va.clone().setY(base + 0.63), vb.clone().setY(base + 0.63), TAXIWAY_WIDTH + SH * 2));
       for (const p of [sg.a, sg.b]) { const k = `${p.x.toFixed(1)},${p.y.toFixed(1)}`; capped.set(k, (capped.get(k) ?? 0) + 1); }
@@ -202,7 +212,7 @@ export function buildAirport(world: World, air: OsmAirport, fades: Fade[], night
     // centreline: a painted stripe (wider than life so it reads from the tower), black-edged on concrete
     const e0 = va.clone().addScaledVector(d, -0.25).setY(base + 0.8), e1 = vb.clone().addScaledVector(d, 0.25).setY(base + 0.8);
     clGeos.push(ribbon(e0, e1, 0.55)); clLine.push(e0.x, e0.y, e0.z, e1.x, e1.y, e1.z);
-    if (sg.apron) clBack.push(ribbon(e0.clone().setY(base + 0.77), e1.clone().setY(base + 0.77), 0.95));
+    if (sg.apron || opts.allStrips) clBack.push(ribbon(e0.clone().setY(base + 0.77), e1.clone().setY(base + 0.77), 0.95));
   }
   for (const [k, cnt] of capped) {
     void cnt; const [x, y] = k.split(',').map(Number);

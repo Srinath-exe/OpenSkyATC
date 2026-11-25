@@ -12,6 +12,7 @@
   remembered in localStorage: 0 = 16 kHz context, 1 = the microphone's own rate (resampled here), 2 = that and no
   browser voice processing. Silent audio is never sent to a recogniser (Whisper invents words for it).
 */
+import { EV_AUDIO_DEVICES, micConstraints } from '@/lib/audioDevices';
 
 export interface MicCapture {
   /** Start recording (opens the microphone the first time). Resolves once audio is flowing. `onAudio` receives the
@@ -23,6 +24,8 @@ export interface MicCapture {
   stop(tailMs?: number): Promise<Float32Array>;
   /** The last stop(): the tail actually waited (ms). */
   readonly lastTailMs: number;
+  /** The transmission so far (16 kHz mono) while recording, for a live transcript; null when not recording. */
+  peek(): Float32Array | null;
   /** The microphone is open (a transmission starts without delay). */
   readonly isOpen: boolean;
 }
@@ -75,9 +78,10 @@ export function createMicCapture(opts: { preroll?: number; idleCloseMs?: number 
   let src: MediaStreamAudioSourceNode | null = null;   // held: a collected source node goes quiet
 
   const shut = () => { stream?.getTracks().forEach((t) => t.stop()); void ctx?.close(); ctx = null; node = null; stream = null; src = null; };
+  if (typeof window !== 'undefined') window.addEventListener(EV_AUDIO_DEVICES, () => { if (!cur) shut(); });   // another mic chosen: the next press opens it
   const open = async () => {
     if (ctx && node) return;
-    stream = await navigator.mediaDevices.getUserMedia({ audio: mode >= 2 ? true : { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(mode >= 2 ? true : { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }) });
     try { ctx = mode >= 1 ? new AudioContext() : new AudioContext({ sampleRate: RATE }); src = ctx.createMediaStreamSource(stream); }
     catch { void ctx?.close(); ctx = new AudioContext(); src = ctx.createMediaStreamSource(stream); }   // Firefox: no resampling source
     rate = ctx.sampleRate;
@@ -100,6 +104,12 @@ export function createMicCapture(opts: { preroll?: number; idleCloseMs?: number 
   return {
     get isOpen() { return !!(ctx && node); },
     get lastTailMs() { return lastTailMs; },
+    peek() {
+      const c = cur; if (!c || !c.chunks.length) return null;
+      const n = c.chunks.reduce((s, x) => s + x.length, 0);
+      const audio = new Float32Array(n); let o = 0; for (const x of c.chunks) { audio.set(x, o); o += x.length; }
+      return resample(audio, rate);
+    },
     start(onAudio?: (pcm: Float32Array) => void) {
       cur = { chunks: [], onAudio, lastLoud: 0 };
       if (idleTimer) window.clearTimeout(idleTimer);

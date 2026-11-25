@@ -13,6 +13,7 @@ test.describe('graphics quality', () => {
   test('settings pins a tier and persists it; the pin survives a reload @full', async ({ openGame, game, page }) => {
     await openGame(APP);
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     const section = page.getByTestId('graphics-section');
     await expect(section).toBeVisible();
     await expect(page.getByTestId('gfx-auto')).toHaveAttribute('aria-pressed', 'true');
@@ -22,6 +23,7 @@ test.describe('graphics quality', () => {
     await page.reload();
     await game.waitReady();
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await expect(page.getByTestId('gfx-low')).toHaveAttribute('aria-pressed', 'true');
     // the Settings blob itself is untouched by the pin
     const settings = await readLocalStorageJson<Record<string, unknown> | null>(page, 'skycontrol_settings');
@@ -47,6 +49,7 @@ test.describe('graphics quality', () => {
     expect((await stats()).fxaa).toBe(true);
     // live switch from the settings section (no reload): the map re-reports the tier and drops the passes
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await page.getByTestId('gfx-low').click();
     await expect(map).toHaveAttribute('data-quality', 'low');
     await expect.poll(async () => (await stats()).bokeh).toBe(false);

@@ -143,7 +143,7 @@ export function buildObservation(e: SimEngine, opts: ObserveOptions): Observatio
   const windMag = mag(wx.windDirTrue, e.magVar);
 
   const L: string[] = [];
-  L.push(`SKYCONTROL ${e.air.icao} · you are ${position.toUpperCase()} · sim ${clock(e.time)}`);
+  L.push(`OpenATC ${e.air.icao} · you are ${position.toUpperCase()} · sim ${clock(e.time)}`);
   L.push(`WX wind ${pad3(windMag)}/${Math.round(wx.windKt)}${wx.gustKt ? `G${Math.round(wx.gustKt)}` : ''} kt · vis ${wx.visM >= 10000 ? '10 km+' : `${(wx.visM / 1000).toFixed(1)} km`} · ${wx.cloud}${atis ? ` · QNH ${atis.qnh} · ATIS ${atis.letter}` : ''}`);
   L.push(`RUNWAYS dep ${runways.filter(r => r.activeDep).map(r => r.name).join(',') || '-'} · arr ${runways.filter(r => r.activeArr).map(r => r.name).join(',') || '-'}${rwyRows.length ? ' · ' + rwyRows.map(r => `${r.name} ${r.status === 'open' ? (r.occupant ? `OCCUPIED (${r.occupant})` : 'FREE') : r.status.toUpperCase()}`).join(' · ') : ''}`);
   L.push(`SCORE ${e.stats.points} · TRAFFIC ${counts.total} (air ${counts.air}, ground ${counts.gnd})`);

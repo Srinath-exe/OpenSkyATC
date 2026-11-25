@@ -99,14 +99,34 @@ export function pickCarrier(icao: string, r1: number, r2: number): Airline {
   const prof = profileOf(icao);
   const home = r1 < 0.65 ? weighted(prof.carriers, r2) : null;
   const al = home ? AIRLINE_BY_ICAO[home] : undefined;
-  return al ?? AIRLINES[Math.min(AIRLINES.length - 1, Math.floor(r2 * AIRLINES.length))];
+  if (al && typesAt(icao, al).length) return al;
+  const guests = AIRLINES.filter(a => typesAt(icao, a).length); const list = guests.length ? guests : AIRLINES;
+  return list[Math.min(list.length - 1, Math.floor(r2 * list.length))];
+}
+/** Airline and type pairs there is no real livery for: so the game does not fly them (an airline with none left does not fly at all). */
+const NO_LIVERY: Record<string, string> = {
+  BAW: 'A359', VIR: 'A359', AFR: 'A359 B789', TRA: 'A20N', UAE: 'A359', THY: 'B789', AIC: 'A359', IGO: 'A320 A20N A321 AT76', SIA: 'B789 B788', SCO: 'A20N A321',
+  CPA: 'A321 A20N', HKE: 'A320 A20N A321', CES: 'B789', CCA: 'B789', JAL: 'A359', FDX: 'B763 B77W MD11 AT76', UPS: 'MD11',
+};
+const REGIONS: Record<string, string> = {
+  NA: 'UAL AAL DAL SWA JBU ASA SKW FDX UPS', EU: 'BAW VIR EIN EZY RYR DLH AFR TRA KLM SWR THY', ME: 'UAE FDB QTR ETD', IN: 'AIC IGO', AS: 'SIA SCO CPA HKE CES CCA ANA JAL', OC: 'QFA VOZ JST ANZ',
+};
+const regionOf = (airline: string) => Object.keys(REGIONS).find(r => REGIONS[r].split(' ').includes(airline)) ?? '';
+const airportRegion = (icao: string) => /^[KC]/.test(icao) ? 'NA' : /^[EL]/.test(icao) ? 'EU' : /^O/.test(icao) ? 'ME' : /^V[IAOE]/.test(icao) ? 'IN' : /^Y|^NZ/.test(icao) ? 'OC' : 'AS';
+const LONG_HAUL = new Set(['A332', 'A333', 'A339', 'A346', 'A359', 'A35K', 'A388', 'B744', 'B748', 'B763', 'B764', 'B772', 'B77L', 'B77W', 'B788', 'B789', 'B78X']);
+/** The types an airline would really bring to an airport: with its own livery, and long-haul ones from another part of the
+ *  world (a Scoot A320 does not turn up in San Francisco). */
+function typesAt(icao: string, a: Airline): string[] {
+  const no = new Set((NO_LIVERY[a.icao] ?? '').split(' ')), far = regionOf(a.icao) !== airportRegion(icao);
+  return Object.keys(a.fleet).filter(t => !no.has(t) && (!far || LONG_HAUL.has(t)));
 }
 
 /** A type from the carrier's fleet that the runway allows and the stand can take (null when nothing fits). */
-export function pickType(carrier: Airline, r: number, opts: { weights?: Set<WeightClass> | null; stand?: StandSize | null } = {}): string | null {
+export function pickType(carrier: Airline, r: number, opts: { weights?: Set<WeightClass> | null; stand?: StandSize | null; icao?: string } = {}): string | null {
+  const only = opts.icao ? typesAt(opts.icao, carrier) : null;
   const fleet: Record<string, number> = {};
   for (const [t, w] of Object.entries(carrier.fleet)) {
-    if (!AIRCRAFT_DB[t] || w <= 0) continue;
+    if (!AIRCRAFT_DB[t] || w <= 0 || (only && !only.includes(t))) continue;
     if (opts.weights && opts.weights.size && !opts.weights.has(AIRCRAFT_DB[t].weightClass)) continue;
     if (opts.stand && !sizeFits(t, opts.stand)) continue;
     fleet[t] = w;

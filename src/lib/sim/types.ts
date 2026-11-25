@@ -116,6 +116,8 @@ export interface DrivePath {
   cum: number[];
   total: number;
   holdAt?: number;
+  /** A pushback: the lane node its nose is left pointing at, where the taxi begins. */
+  join?: string;
   kind: 'taxi' | 'runway' | 'approach' | 'pushback';
   /** Node ids of hold-short places along this path (crossing runways), with arc-length. */
   holds?: PathHold[];

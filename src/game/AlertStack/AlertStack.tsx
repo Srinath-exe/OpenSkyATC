@@ -184,7 +184,7 @@ export function AlertsDrawer() {
   return (
     <GlassPanel
       ref={ref}
-      variant="glass-strong"
+      variant="solid"
       title="Alerts"
       titleSize="l"
       parenthetical={all.length ? `(${all.length})` : undefined}

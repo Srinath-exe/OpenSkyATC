@@ -13,6 +13,7 @@
   OPENATC_STT_URL (optional) forwards Whisper's requests to a separate faster-whisper service instead (ml/serve/stt_server.py,
   scripts/openatc-stt.service: not installed; it needs the owner's approval).
 */
+import { withRequestId } from '@/lib/requestId';
 import { handleStt, firstEngine, clientKey, sttState } from './handler';
 import type { SttEngineId } from './handler';
 import { transcribe, sttConfig, loadEngine, transcribeParakeet, loadParakeet, parakeetReady, parakeetModelName } from './engine';
@@ -29,7 +30,7 @@ function engineFor(asked: SttEngineId): SttEngineId {
   return 'whisper';
 }
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePost(req: Request): Promise<Response> {
   return handleStt(req, {
     limiter: state.limiter,
     gate: state.gate,
@@ -56,7 +57,7 @@ async function forward(base: string, audio: Float32Array, names: string[], alter
   return { text: j.text, alternatives: j.alternatives, ms: j.ms, model: j.model };
 }
 
-export async function GET(req: Request): Promise<Response> {
+async function handleGet(req: Request): Promise<Response> {
   const c = sttConfig();
   const first = engineFor(firstEngine());
   const url = new URL(req.url);
@@ -71,3 +72,6 @@ export async function GET(req: Request): Promise<Response> {
   const model = first === 'parakeet' ? parakeetModelName() : c.model;
   return new Response(JSON.stringify({ ok: true, model, first, loaded: state.loaded[first], busy: state.gate.busy }), { headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 }
+
+export const POST = withRequestId(handlePost);
+export const GET = withRequestId(handleGet);

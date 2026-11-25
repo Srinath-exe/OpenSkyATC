@@ -5,6 +5,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import s from './landing.module.css';
+import { LogoMark } from '@/design/LogoMark'
 
 const N = 480;
 const FW = 1600, FH = 900;
@@ -291,9 +292,9 @@ export default function LandingJfk() {
   return (
     <main ref={ref} className={s.root}>
       <header className={s.nav}>
-        <Link href="/landing/jfk" className={s.brand} aria-label="SKYCONTROL">
-          <svg viewBox="0 0 24 24" aria-hidden="true" className={s.logo}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="5.5" /><path d="M12 12 L19 5" /></svg>
-          SKYCONTROL
+        <Link href="/landing/jfk" className={s.brand} aria-label="OpenATC">
+          <LogoMark size={24} />
+          OpenATC
         </Link>
         <div className={s.navMid}>
           <span className={s.live}><i />KJFK</span>
@@ -456,7 +457,7 @@ export default function LandingJfk() {
           <h2>Ready when you are.</h2>
           <Link href="/" className={s.ctaPrimary}>Play JFK now</Link>
         </div>
-        <footer className={s.footer}><span>SKYCONTROL</span><span>Film rendered from the game's own JFK data.</span></footer>
+        <footer className={s.footer}><span>OpenATC</span><span>Film rendered from the game's own JFK data.</span></footer>
       </section>
     </main>
   );

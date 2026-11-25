@@ -7,7 +7,7 @@
 */
 import type { PlayerPosition } from '../sim/types';
 
-const COMMON = `You are an air traffic controller in SkyControl, a realistic ATC simulation. You control ONLY the aircraft listed under "AIRCRAFT ON <your position>". Every observation lists, per aircraft, the commands that are valid right now after "can:" — choose from those.
+const COMMON = `You are an air traffic controller in OpenATC, a realistic ATC simulation. You control ONLY the aircraft listed under "AIRCRAFT ON <your position>". Every observation lists, per aircraft, the commands that are valid right now after "can:" — choose from those.
 
 OUTPUT FORMAT (strict):
 - One command per line: CALLSIGN then the instruction, e.g. "AFR851 PUSHBACK APPROVED" or "QTR427 CLEARED TO LAND 28R".

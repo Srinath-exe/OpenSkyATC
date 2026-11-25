@@ -107,7 +107,7 @@ test('understandVoice(): rules first, then the model; confident -> send, unsure 
   const r1 = await understandVoice('Delta four two one, hold position', ctx, 0, fake('IGNORED', 1), state);
   assert.ok(r1.ok); assert.equal(r1.source, 'L0'); assert.equal(calls, 0);
   // 2. rules fail, model confident and the words agree -> ok, canonical line
-  const r2 = await understandVoice('delta four two one uh turn heading two seven zero please', ctx, e.magVar ?? 0, fake('DAL421 Fly heading 270', 0.93), state);
+  const r2 = await understandVoice('delta four two one uh turn heading two seven zero thingy mate', ctx, e.magVar ?? 0, fake('DAL421 Fly heading 270', 0.93), state);
   assert.ok(r2.ok, r2.error ?? ''); assert.equal(r2.source, 'L1'); assert.match(r2.line, /^DAL421 Fly heading 270/);
   // 3. the old gate (verifier: null): model unsure -> not sent, line kept for editing, confidence in the message
   const r3 = await understandVoice('delta for twenty won uh hold your position please', ctx, 0, fake('DAL421 Hold position', 0.31), state, 0.5, { verifier: null });
@@ -127,7 +127,7 @@ test('understandVoice(): when the rules can resolve the callsign the model got w
   const ctx = fromEngine(e) as never;
   const state = { text: '@APP 31L', callsigns: ['UPS973', 'BAW963'] };
   const fake = { complete: async () => ({ line: 'BAW963 Fly heading 102', confidence: 0.97, ms: 1, sayAgain: false }) };
-  const r = await understandVoice('973 uh fly heading one zero two please', ctx, 0, fake, state);
+  const r = await understandVoice('973 uh fly heading one zero two thingy mate', ctx, 0, fake, state);
   assert.equal(r.ok, false, 'not sent: the aircraft was corrected');
   assert.match(r.line, /^UPS973 /); assert.match(r.error ?? '', /UPS973/);
 });
@@ -168,7 +168,7 @@ test('understandVoice(): the verifier sends a confident proposal that matches th
   const state = { text: '@APP 31L', callsigns: ['BAW963', 'UPS973'] };
   const sure = SURE;
   const fake = (line: string) => ({ complete: async () => ({ line, confidence: 0.99, ms: 1, sayAgain: false, signals: sure }) });
-  const said = 'speedbird nine six three uh turn heading one zero two please';
+  const said = 'speedbird nine six three uh turn heading one zero two okay buddy';
   const good = await understandVoice(said, ctx, 0, fake('BAW963 Fly heading 102'), state);
   assert.equal(good.source, 'L1'); assert.ok(good.ok, good.error ?? ''); assert.equal(good.verify?.gate, 'send'); assert.equal(good.verify?.model, VERIFIER_FULL.name);
   // the same confident decoder, but a heading nobody said: the old gate (confidence >= 0.5) would have sent it
@@ -177,7 +177,7 @@ test('understandVoice(): the verifier sends a confident proposal that matches th
   const old = await understandVoice(said, ctx, 0, fake('BAW963 Fly heading 120'), state, 0.5, { verifier: null });
   assert.equal(old.ok, true, 'verifier: null keeps the old confidence gate');
   // the wrong aircraft, said oddly enough that the rules cannot be sure: held back either way (fusion or verifier)
-  const cs = await understandVoice('nine seven tree uh fly heading one zero two please', ctx, e.magVar ?? 0, fake('BAW963 Fly heading 102'), state);
+  const cs = await understandVoice('nine seven tree uh fly heading one zero two thingy mate', ctx, e.magVar ?? 0, fake('BAW963 Fly heading 102'), state);
   assert.equal(cs.ok, false, `sent ${cs.line} for "nine seven tree" (p=${cs.verify?.p})`);
   // each S1 checkpoint has its own gate (thresholds differ): the result names its model, and that gate is used
   for (const url of Object.keys(VERIFIERS)) {

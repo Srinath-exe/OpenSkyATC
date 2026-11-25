@@ -42,6 +42,9 @@ export interface PilotVoice {
 }
 
 /** The same callsign always gets the same voice, rate and pitch. */
+/** How pressed each crew sounds, 0 to 1 (the store keeps it, in halves so prepared lines still fit). */
+const STRESS = new Map<string, number>();
+export function setVoiceStress(callsign: string, s: number): void { const k = callsign.toUpperCase(), v = Math.round(Math.max(0, Math.min(1, s)) * 2) / 2; if (v) STRESS.set(k, v); else STRESS.delete(k); }
 export function voiceFor(callsign: string): PilotVoice {
   const cs = (callsign || '').toUpperCase().trim();
   const h = hash32(cs);
@@ -50,8 +53,10 @@ export function voiceFor(callsign: string): PilotVoice {
   const female = (h & 1) === 1;
   const voice: PilotVoiceId = british ? (female ? 'bf_isabella' : 'bm_fable') : (female ? 'af_heart' : 'am_puck');
   // the crew's character (sim/persona.ts) sets the pace too: a student or a crew new to the airport talks slower
-  const speed = Math.round((1.0 + ((h >>> 8) % 1000) / 1000 * 0.14) * personaOf(callsign).rate * 1000) / 1000;
-  const detune = ((h >>> 18) % 141) - 70;
+  // under pressure (an emergency, a long wait, low fuel) the crew talks faster and a little higher
+  const stress = STRESS.get(cs) ?? 0;
+  const speed = Math.round((1 + 0.1 * stress) * (1.0 + ((h >>> 8) % 1000) / 1000 * 0.14) * personaOf(callsign).rate * 1000) / 1000;
+  const detune = ((h >>> 18) % 141) - 70 + Math.round(60 * stress);
   return { voice, speed, detune };
 }
 

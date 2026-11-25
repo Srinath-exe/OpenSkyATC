@@ -4,6 +4,7 @@
   the narrator, with the call to make. Around it the cinema (Cinema.tsx): the gate and cold open, a briefing before each
   mission, a stamp at the end. The game behind runs in its minimal mode: map, aircraft, command line.
 */
+import { Setup, setupDone } from './Setup'
 import * as React from 'react'
 import Link from 'next/link'
 import s from './Tutorial.module.css'
@@ -170,7 +171,8 @@ export function CoachOverlay() {
 // the page's tutorial layer: the gate (and the cold open on a first visit), then missions
 // ---------------------------------------------------------------------------------------------------------------------
 export function useTutorBoot(ready: boolean, tab: Tab) {
-  const [intro, setIntro] = React.useState<'gate' | 'off'>('gate')
+  // first the setup (models + microphone, once), then the intro gate
+  const [intro, setIntro] = React.useState<'setup' | 'gate' | 'off'>(() => (setupDone() ? 'gate' : 'setup'))
   React.useEffect(() => {
     if (!ready) return
     coach.init(); coach.setTab(tab)
@@ -178,11 +180,11 @@ export function useTutorBoot(ready: boolean, tab: Tab) {
   }, [ready, tab])
   React.useEffect(() => () => { sim.setPaused(false) }, [])
   // the game rests under the full-screen intro (the map idles at a low frame rate while paused and still)
-  React.useEffect(() => { if (ready && intro === 'gate') sim.setPaused(true) }, [ready, intro])
+  React.useEffect(() => { if (ready && intro !== 'off') sim.setPaused(true) }, [ready, intro])
   const seen = typeof window !== 'undefined' && (() => { try { return localStorage.getItem(INTRO_KEY) === '1' } catch { return false } })()
   const markSeen = () => { try { localStorage.setItem(INTRO_KEY, '1') } catch { /* */ } }
   const firstOpen = (t: Tab) => { const p = coach.state.progress; const c = chaptersOf(t).find((x) => !p[x.id]) ?? chaptersOf(t)[0]; coach.setTab(t); coach.open(c.id) }
-  const layer = intro === 'gate' && ready ? (
+  const layer = intro === 'setup' ? <Setup onDone={() => setIntro('gate')} /> : intro === 'gate' && ready ? (
     <Prologue returning={seen} onPick={(t) => { markSeen(); setIntro('off'); firstOpen(t) }} onSkip={() => { markSeen(); setIntro('off'); firstOpen(coach.state.tab) }} />
   ) : null
   return { layer, replayIntro: () => setIntro('gate') }
@@ -192,8 +194,9 @@ export function useTutorBoot(ready: boolean, tab: Tab) {
  *  hear aviation words much worse, so when one of those is on the card says so and offers the switch back. */
 function SpeechEngine() {
   const { engine } = useVoicePrefs()
-  if (engine === 'server' || engine === 'native') return <div className={s.engine} data-ok="true">Speech: server, tuned for ATC</div>
-  const what = engine === 'local' ? 'on this device (Moonshine): it mishears aviation words far more often' : "the browser's (Google): it mishears aviation words"
+  if (engine === 'server' || engine === 'native') return <div className={s.engine} data-ok="true">Speech: ATC-ASR, server</div>
+  if (engine === 'local') return <div className={s.engine} data-ok="true">Speech: ATC-ASR, on this device</div>
+  const what = "the browser's (Google): it mishears aviation words"
   return (
     <div className={s.engine} data-ok="false">
       Speech: {what}. <button type="button" className={s.engineFix} onClick={() => setVoiceEngine('server')} data-testid="tutor-speech-server">Use the server</button>

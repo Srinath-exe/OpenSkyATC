@@ -1,4 +1,5 @@
 'use client'
+import { applySink } from '@/lib/audioDevices'
 /*
   The tutorial's sound (files from scripts/learn_audio.mjs, made with ElevenLabs): the narrator and the radio voices
   (with word timings for synced captions), effects, and a music bed that ducks under the voice. Web Audio, unlocked by
@@ -7,6 +8,8 @@
 const BASE = '/learn/audio'
 
 export interface LineInfo { dur: number; radio: boolean; words: Array<[string, number, number]> }
+// the music sits well under everything: a bed, not a soundtrack (0.55 was too loud)
+const MUSIC = 0.12, MUSIC_DUCK = 0.04
 interface Index { lines: Record<string, LineInfo>; sfx: Record<string, { loop: boolean }>; music: Record<string, unknown> }
 export interface Playing { id: string; start: number; dur: number; stop: () => void }
 
@@ -40,9 +43,9 @@ class Sound {
   unlock(): void {
     if (this.ctx) { void this.ctx.resume(); return }
     const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    const ctx = new AC(); this.ctx = ctx
+    const ctx = new AC(); this.ctx = ctx; applySink(ctx)
     this.master = ctx.createGain(); this.master.gain.value = this.muted ? 0 : 1; this.master.connect(ctx.destination)
-    this.musicBus = ctx.createGain(); this.musicBus.gain.value = 0.55; this.musicBus.connect(this.master)
+    this.musicBus = ctx.createGain(); this.musicBus.gain.value = MUSIC; this.musicBus.connect(this.master)
     this.sfxBus = ctx.createGain(); this.sfxBus.gain.value = 0.8; this.sfxBus.connect(this.master)
     this.voBus = ctx.createGain(); this.voBus.gain.value = 1
     this.analyser = ctx.createAnalyser(); this.analyser.fftSize = 512; this.analyser.smoothingTimeConstant = 0.6
@@ -90,8 +93,8 @@ class Sound {
   private duck(t0: number, t1: number): void {
     const ctx = this.ctx!; const g = this.musicBus.gain
     this.voCount++
-    g.cancelScheduledValues(t0); g.setTargetAtTime(0.22, t0 - 0.05, 0.08)
-    window.setTimeout(() => { this.voCount--; if (this.voCount <= 0 && this.ctx) g.setTargetAtTime(0.55, this.ctx.currentTime, 0.4) }, Math.max(0, (t1 - ctx.currentTime) * 1000 + 150))
+    g.cancelScheduledValues(t0); g.setTargetAtTime(MUSIC_DUCK, t0 - 0.05, 0.08)
+    window.setTimeout(() => { this.voCount--; if (this.voCount <= 0 && this.ctx) g.setTargetAtTime(MUSIC, this.ctx.currentTime, 0.4) }, Math.max(0, (t1 - ctx.currentTime) * 1000 + 150))
   }
 
   async sfx(name: string, at = 0, gain = 1): Promise<Playing | null> {

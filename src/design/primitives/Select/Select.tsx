@@ -42,8 +42,9 @@ export interface MenuProps<V extends string = string> {
 export function Menu<V extends string = string>({ options, value, activeIndex = -1, onActiveChange, onSelect, placement = 'bottom', emptyText = 'No results', id, className, style, testId, tabular = false }: MenuProps<V>) {
   const ref = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
-    const el = ref.current?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)
-    el?.scrollIntoView({ block: 'nearest' })
+    // keep the active item in view by scrolling the menu itself (scrollIntoView would also scroll the page or panel behind it)
+    const m = ref.current, el = m?.querySelector<HTMLElement>(`[data-index="${activeIndex}"]`)
+    if (m && el) { if (el.offsetTop < m.scrollTop) m.scrollTop = el.offsetTop; else if (el.offsetTop + el.offsetHeight > m.scrollTop + m.clientHeight) m.scrollTop = el.offsetTop + el.offsetHeight - m.clientHeight }
   }, [activeIndex])
   return (
     <div ref={ref} id={id} role="listbox" data-testid={testId} style={style} className={cx(styles.menu, placement === 'bottom' && styles.menuBottom, placement === 'top' && styles.menuTop, placement === 'static' && styles.menuStatic, tabular && styles.tabular, className)}>

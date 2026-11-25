@@ -27,8 +27,7 @@
 .brand:focus-visible { box-shadow: var(--focus-ring); }
 .wordmark {
   font: var(--fw-medium) var(--fs-body-m) / 1 var(--font);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
 }
 .crumb {
   font: var(--fw-body-m) var(--fs-body-m) / 1 var(--font);
@@ -51,6 +50,7 @@
 }
 .inner.wide { max-width: 1320px; }
 .inner.narrow { max-width: 680px; }
+.inner.full { max-width: none; }
 @media (max-width: 767px) {
   .crumb { display: none; }
   .inner { padding-top: var(--s-5); }

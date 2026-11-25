@@ -43,3 +43,4 @@
 .scoreDelta[data-pos="true"] { color: var(--green); }
 .scroll { flex: 1; min-height: 0; }
 .empty { padding: var(--s-6) 0; }
+.drawer.drawer { border: 1px solid var(--line-strong); box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5); }

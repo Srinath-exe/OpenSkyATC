@@ -54,7 +54,7 @@ function originFor(dir: number, r: BlockRequest): { dx: number; dy: number; ax: 
 export class LabelPlacer {
   private states = new Map<number, State>();
 
-  place(reqs: BlockRequest[], width: number, now: number): Map<number, BlockPlacement> {
+  place(reqs: BlockRequest[], width: number, now: number, keepOff: Rect[] = []): Map<number, BlockPlacement> {
     const out = new Map<number, BlockPlacement>();
     const placed: Rect[] = [];
     // Every symbol is an obstacle for every block.
@@ -70,7 +70,7 @@ export class LabelPlacer {
       if (!st) { st = { dir: order[0], since: now - COOLDOWN_MS, from: null, to: originFor(order[0], r), animStart: -1 }; this.states.set(r.id, st); }
 
       const rectFor = (dir: number): Rect => { const o = originFor(dir, r); return { x: r.sx + o.dx, y: r.sy + o.dy, w: r.w, h: r.h }; };
-      const clash = (rect: Rect) => placed.some(p => overlaps(p, rect)) || symbols.some((s, i) => reqs[i].id !== r.id && overlaps(s, rect, 0));
+      const clash = (rect: Rect) => placed.some(p => overlaps(p, rect)) || symbols.some((s, i) => reqs[i].id !== r.id && overlaps(s, rect, 0)) || keepOff.some(k => overlaps(k, rect, 0));
 
       let dir = st.dir;
       const current = rectFor(dir);
@@ -82,6 +82,7 @@ export class LabelPlacer {
           let score = 0;
           for (const p of placed) if (overlaps(p, rect)) score += 10;
           symbols.forEach((s, i) => { if (reqs[i].id !== r.id && overlaps(s, rect, 0)) score += 6; });
+          for (const k of keepOff) if (overlaps(k, rect, 0)) score += 4;   // what the chart says (runway names, altitudes)
           score += order.indexOf(cand) * 0.5; // prefer the default anchor
           if (score < bestScore) { bestScore = score; best = cand; }
           if (score === 0) break;
@@ -99,7 +100,7 @@ export class LabelPlacer {
       const o = originFor(dir, r);
       let dx = o.dx, dy = o.dy;
       if (st.from && st.animStart >= 0) {
-        const t = Math.min(1, (now - st.animStart) / EASE_MS);
+        const t = Math.max(0, Math.min(1, (now - st.animStart) / EASE_MS));
         const e = easeOut(t);
         dx = st.from.dx + (o.dx - st.from.dx) * e;
         dy = st.from.dy + (o.dy - st.from.dy) * e;

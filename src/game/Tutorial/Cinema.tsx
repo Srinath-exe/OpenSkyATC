@@ -121,7 +121,7 @@ export function Prologue({ onPick, onSkip, returning = false }: { onPick: (tab: 
       <div className={s.radar} aria-hidden><i className={s.sweep} /><b /><b /><b /><em style={{ left: '62%', top: '30%' }} /><em style={{ left: '30%', top: '58%', animationDelay: '1.3s' }} /><em style={{ left: '70%', top: '68%', animationDelay: '2.1s' }} /></div>
       <div className={s.gateText}>
         <div className={s.gateKicker}>KSFO · 37.62°N 122.38°W · One frequency</div>
-        <h1 className={s.gateTitle}><span>Skycontrol</span><span>Training</span></h1>
+        <h1 className={s.gateTitle}><span>OpenATC</span><span>Training</span></h1>
         {returning ? (
           <>
             <button className={s.take} onClick={skip} data-testid="tutor-continue"><span className={s.takeRing} />Continue training</button>

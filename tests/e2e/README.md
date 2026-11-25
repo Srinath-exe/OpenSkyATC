@@ -1,4 +1,4 @@
-# SkyControl e2e harness (Playwright)
+# OpenATC e2e harness (Playwright)
 
 Browser tests for the real product: home page, settings page and the `/play` game shell driven
 through the deterministic test API (`window.__atcTest`, `src/lib/sim/testApi.ts`). Design:

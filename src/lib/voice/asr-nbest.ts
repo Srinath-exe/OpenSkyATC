@@ -6,9 +6,10 @@
   ranked first; the first that parses wins. When none parses, the S1 model (L1, through understandVoice) reads each of
   the first three and the most confident proposal wins. Wraps understand.ts without changing it.
 */
-import { understand, understandVoice } from './understand';
+import { rulesDoubt, understand, understandVoice } from './understand';
+import { cutOff } from './verify';
 import type { L1Like, VoiceResult } from './understand';
-import type { ParseCtx } from '../sim/commands';
+import { spelledPause, type ParseCtx } from '../sim/commands';
 import { AIRLINE_TELEPHONY } from '../sim/phraseology';
 import { aircraftFromContext, repairTranscript } from './asr-repair';
 import type { AsrAircraft, Repair } from './asr-repair';
@@ -42,6 +43,8 @@ const checkCallsign = (r: VoiceResult, rep: Repair | null): VoiceResult => {
   return { ...r, ok: false, error: `Callsign matched by sound (${rep.callsign}): check and press Enter` };
 };
 
+/** A command line without the taxiways it names. */
+const butTaxiways = (line: string): string => line.replace(/ via [A-Z]{0,2}\d{0,2}(?:, [A-Z]{0,2}\d{0,2})*(?=,| \/|$)/, ' via').replace(/ \[.*$/, '');
 export async function understandHeard(alternatives: string[], ctx: ParseCtx, magVar: number, l1: L1Like | null,
   state: { text: string; callsigns: string[] } | null, opts: HeardOptions = {}): Promise<HeardResult> {
   const repair = opts.repair ?? true;
@@ -58,8 +61,12 @@ export async function understandHeard(alternatives: string[], ctx: ParseCtx, mag
   let fuzzy: HeardResult | null = null;
   for (const t of tries) {
     for (const text of t.rep && t.rep.text !== t.raw ? [t.rep.text, t.raw] : [t.raw]) {
-      const u = understand(text, ctx, magVar);
+      let u = understand(text, ctx, magVar);
+      // the clean-up drops punctuation: where a pause kept two letters apart ("sierra, alpha"), the taxiways are read off the
+      // words as heard - the taxiways alone: everything else in the two readings must be the same
+      if (u.ok && text !== t.raw && spelledPause(t.raw)) { const heard = understand(t.raw, ctx, magVar); if (heard.ok && butTaxiways(heard.line) === butTaxiways(u.line)) u = heard; }
       if (u.ok) {
+        if (l1 && state && (cutOff(t.raw) || rulesDoubt(u, ctx, magVar))) continue;   // shaky or cut off: understandVoice below asks the model too
         const r = checkCallsign({ ...u, confidence: 1, sayAgain: false, modelMs: null }, text === t.rep?.text ? t.rep : null);
         const h: HeardResult = { ...r, alt: t.i, heard: text, notes: text === t.rep?.text ? t.rep.notes : [] };
         if (h.ok) return h;

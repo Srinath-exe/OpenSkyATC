@@ -45,10 +45,9 @@
   color: var(--ink);
   text-decoration: none;
   font-weight: 650;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.02em;
   font-size: 13px;
 }
-.logo { width: 22px; height: 22px; fill: none; stroke: var(--radar); stroke-width: 1.4; }
 .navMid { display: flex; align-items: center; gap: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: var(--ink-3); text-transform: uppercase; }
 .live { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-2); }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--radar); box-shadow: 0 0 10px var(--radar); animation: blink 1.6s ease-in-out infinite; }
@@ -109,6 +108,8 @@
 .tag[data-mode='radar'] .tagBox { background: transparent; border: 0; padding: 0; top: -36px; backdrop-filter: none; }
 .tag[data-mode='radar'] .tagBox b { color: var(--c); }
 .ph { font-weight: 700; letter-spacing: 0.08em; }
+.tag[data-flip='1'] .tagBox { left: auto; right: 21px; border-left: 0; border-right: 2px solid var(--c); text-align: right; }
+.tag[data-flip='1'] .tagLead { left: auto; right: 4px; transform-origin: 100% 0; transform: rotate(40deg); }
 .tag[data-mode='final'] .tagBox, .tag[data-mode='voice'] .tagBox { font-size: 12px; }
 
 .anchor { position: absolute; left: 0; top: 0; will-change: transform, opacity; pointer-events: none; }
@@ -176,6 +177,7 @@
 
 /* ---------- chapter copy ---------- */
 .copyWrap { position: absolute; inset: 0; pointer-events: none; }
+.copy > * { min-width: 0; }
 .copy {
   --p: 0;
   --lp: 0;
@@ -228,6 +230,7 @@
 .ctaPrimary:hover::after { transform: translateX(3px); }
 .ctaGhost { padding: 14px 22px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.22); color: var(--ink); text-decoration: none; font-size: 15px; transition: border-color 180ms ease, background 180ms ease; }
 .ctaGhost:hover { border-color: rgba(255, 255, 255, 0.5); background: rgba(255, 255, 255, 0.05); }
+.ctaMain, .ctaMore { justify-content: center; }
 .ctaNote { font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--ink-3); }
 
 .stats { display: flex; flex-wrap: wrap; gap: 10px 28px; }
@@ -288,8 +291,8 @@
 .wave { display: flex; align-items: center; gap: 3px; height: 38px; }
 .wave i { width: 3px; height: 38px; border-radius: 2px; background: var(--orange); transform: scaleY(0.06); will-change: transform; }
 .voice .type { font-size: 18px; font-style: italic; color: var(--ink); }
-.latency { --l: 0; display: grid; grid-template-columns: repeat(3, auto); gap: 6px 4px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); width: min(420px, 100%); }
-.latency > span { display: grid; gap: 5px; width: calc(var(--w) * 420px); max-width: 100%; }
+.latency { --l: 0; display: grid; grid-template-columns: 3fr 3fr 4fr; gap: 6px 4px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); width: min(420px, 100%); }
+.latency > span { display: grid; gap: 5px; min-width: 0; }
 .latency > span i { height: 4px; border-radius: 2px; background: var(--radar); transform-origin: 0 50%; transform: scaleX(var(--l)); }
 .latency > span:nth-child(2) i { background: var(--cyan); }
 .latency > span:nth-child(3) i { background: var(--orange); }
@@ -306,9 +309,17 @@
 .toggles[data-tower='ai'] [data-seat='tower'] .sw i:last-child, .toggles[data-app='ai'] [data-seat='app'] .sw i:last-child { color: #03140b; }
 
 /* ---------- loader ---------- */
-.loader { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 18px; background: var(--bg); transition: opacity 600ms ease; font-family: var(--mono); font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
-.loader i { width: 64px; height: 64px; border-radius: 50%; border: 1px solid rgba(92, 255, 176, 0.35); background: conic-gradient(from 0deg, rgba(92, 255, 176, 0.5), transparent 25%); animation: sweep 1.4s linear infinite; }
-.loader b { color: var(--radar); font-weight: 600; }
+/* the radar loader (RadarLoader.tsx): its canvas draws everything; before the script runs, the scope's rings in CSS */
+.loader {
+  position: fixed; inset: 0; z-index: 40; font-family: var(--mono);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(92, 255, 176, 0.07), transparent 60%),
+    repeating-radial-gradient(circle at 50% 50%, transparent 0 calc(12.5vmax - 1px), rgba(92, 255, 176, 0.05) calc(12.5vmax - 1px) 12.5vmax),
+    var(--bg);
+}
+.loader canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.loader::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.5)); }
+.loader[data-gone='1'] { display: none; }
 @keyframes sweep { to { transform: rotate(360deg); } }
 
 /* ---------- after the film ---------- */
@@ -347,7 +358,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .line { filter: none; }
-  .cue i, .live i, .loader i { animation: none; }
+  .cue i, .live i { animation: none; }
 }
 
 /* taxiway names on the routes: airport location signs (yellow on black), underlined in the route's colour */
@@ -409,7 +420,17 @@
 .ctaLink { color: var(--ink-2); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(255, 255, 255, 0.3); }
 .ctaLink:hover { color: var(--ink); }
 @media (max-width: 640px) {
-  .seats { grid-template-columns: 1fr; }
-  .seatCard { padding: 10px 12px; }
+  /* the ending, compact: pinned above the progress bar, everything in one screen */
+  .outro { top: auto; bottom: 58px; transform: translateX(-50%); gap: 14px; }
+  .outro .h1 { font-size: clamp(38px, 11.5vw, 48px); }
+  .ctaMain { display: grid; grid-template-columns: 1fr; width: 100%; gap: 10px; }
+  .ctaMain a { justify-content: center; width: 100%; padding: 13px 18px; font-size: 15px; }
+  .seats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .seatCard { padding: 11px 6px; text-align: center; justify-items: center; }
+  .seatCard b { font-size: 14px; }
+  .seatCard span { display: none; }
+  .ctaMore { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; width: 100%; }
+  .ctaMore .ctaLink { font-size: 13px; }
+  .ctaMore .ctaNote { grid-column: 1 / -1; margin-top: 2px; }
 }
 .wTwy[data-on='p'] { background: #6f6420; border-color: #6f6420; color: #1a1a1a; }

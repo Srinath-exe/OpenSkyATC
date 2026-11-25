@@ -38,6 +38,8 @@
   "exclude": [
     "node_modules",
     "ml",
-    "film"
+    "film",
+    "mobile",
+    "tests/tmp"
   ]
 }

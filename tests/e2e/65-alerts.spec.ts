@@ -380,7 +380,7 @@ test.describe('alerts: MSAW, runway incursion, ground conflict', () => {
     // the engine scores the pair once (SF1) and logs it once
     await game.waitRadio(/GROUND CONFLICT: (GC1 \/ GC2|GC2 \/ GC1)/, { who: 'SYS' });
     expect((await sim.scoreEvents()).filter((e) => e.code === 'GROUND_CONFLICT')).toHaveLength(1);
-    await sim.advance(5);
+    await sim.advance(3);                                               // (GC1 is clear of GC2 after 8 s)
     expect((await sim.radio()).filter((l) => l.who === 'SYS' && /GROUND CONFLICT:/.test(l.text)), 'counted once while it persists').toHaveLength(1);
     expect((await sim.activeAlerts()).filter((x) => x.kind === 'ground_conflict')).toHaveLength(1);
 

@@ -1,0 +1,58 @@
+/* Hangar: the model list on the left, the aircraft in 3D on the right with its liveries underneath. */
+.root { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: var(--s-4); height: calc(100dvh - var(--nav-h) - 2 * var(--s-5)); min-height: 520px; }
+.models { display: flex; flex-direction: column; min-height: 0; border-radius: 20px; background: var(--bg-1); border: var(--bw) solid var(--line); overflow: hidden; }
+.head { padding: var(--s-4) var(--s-4) var(--s-3); border-bottom: var(--bw) solid var(--line); }
+.title { margin: 0; font: var(--fw-medium) var(--fs-title-m) / 1.1 var(--font); color: var(--text-1); }
+.sub { margin: 6px 0 var(--s-3); font: var(--fw-regular) var(--fs-body-s) / 1.3 var(--font); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.search, .searchSm { width: 100%; box-sizing: border-box; height: 38px; padding: 0 var(--s-3); border-radius: 12px; border: var(--bw) solid var(--line-strong); background: var(--w-03); color: var(--text-1); font: var(--fw-regular) var(--fs-body-s) / 1 var(--font); }
+.search:focus-visible, .searchSm:focus-visible { outline: none; border-color: var(--orange); box-shadow: var(--focus-ring); }
+.search::placeholder, .searchSm::placeholder { color: var(--text-4); }
+.list { list-style: none; margin: 0; padding: var(--s-2); overflow-y: auto; min-height: 0; flex: 1; }
+.item { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 10px var(--s-3); border: 0; border-radius: 12px; background: transparent; text-align: left; cursor: pointer; color: var(--text-2); transition: background-color 140ms ease-out, color 140ms ease-out; }
+.item:hover { background: var(--w-04); color: var(--text-1); }
+.item[aria-selected="true"] { background: var(--orange-tint-08); color: var(--text-1); box-shadow: inset 2px 0 0 var(--orange); }
+.item:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; }
+.itemName { font: var(--fw-medium) var(--fs-body-s) / 1.25 var(--font); }
+.itemMeta { font: var(--fw-regular) var(--fs-label-xs) / 1.2 var(--font); color: var(--text-4); font-variant-numeric: tabular-nums; }
+.empty { padding: var(--s-4); color: var(--text-3); font: var(--fw-regular) var(--fs-body-s) / 1.4 var(--font); }
+
+.stage { position: relative; min-height: 0; border-radius: 24px; overflow: hidden; border: var(--bw) solid var(--line);
+  background: radial-gradient(120% 90% at 50% 18%, #2b3442 0%, #161b23 55%, #0c0f14 100%); }
+.viewer { position: absolute; inset: 0; }
+.viewer canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.caption { position: absolute; top: var(--s-5); left: var(--s-5); right: var(--s-5); pointer-events: none; }
+.capTitle { margin: 0; font: 700 clamp(24px, 3vw, 38px) / 1.05 var(--font); letter-spacing: -0.02em; color: #fff; }
+.capSub { margin: 6px 0 0; font: var(--fw-regular) var(--fs-body-m) / 1.3 var(--font); color: rgba(255, 255, 255, 0.72); }
+.hint { position: absolute; top: var(--s-5); right: var(--s-5); margin: 0; font: var(--fw-regular) var(--fs-label-xs) / 1 var(--font); color: rgba(255, 255, 255, 0.45); pointer-events: none; }
+.liveries { position: absolute; left: var(--s-4); right: var(--s-4); bottom: var(--s-4); padding: var(--s-3) var(--s-4) var(--s-2); border-radius: 18px;
+  background: rgba(12, 15, 20, 0.72); border: 1px solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+.livHead { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-bottom: var(--s-2); }
+.livCount { font: var(--fw-medium) var(--fs-label-xs) / 1 var(--font); letter-spacing: 0.07em; text-transform: uppercase; color: rgba(255, 255, 255, 0.6); white-space: nowrap; }
+.searchSm { max-width: 220px; height: 32px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 112px; overflow-y: auto; padding: 2px; }
+.chip { padding: 7px 12px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.04); color: rgba(255, 255, 255, 0.82); font: var(--fw-regular) var(--fs-body-s) / 1 var(--font); cursor: pointer; white-space: nowrap; transition: background-color 140ms ease-out, border-color 140ms ease-out; }
+.chip:hover { background: rgba(255, 255, 255, 0.1); }
+.chip[aria-selected="true"] { background: var(--orange); border-color: var(--orange); color: #111; font-weight: var(--fw-medium); }
+.chip:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+.credit { margin: var(--s-2) 0 0; font: var(--fw-regular) 11px / 1.4 var(--font); color: rgba(255, 255, 255, 0.45); }
+.credit a { color: rgba(255, 255, 255, 0.7); }
+
+/* phones and narrow windows: the aircraft on top, the list under it */
+@media (max-width: 760px) {
+  .root { display: flex; flex-direction: column; height: auto; min-height: 0; gap: var(--s-3); }
+  .stage { order: -1; flex: none; height: 68dvh; min-height: 440px; border-radius: 20px; }
+  .models { max-height: 70dvh; }
+  .capTitle { font-size: 24px; }
+  .caption { top: var(--s-4); left: var(--s-4); }
+  .hint { display: none; }
+  .liveries { left: var(--s-2); right: var(--s-2); bottom: var(--s-2); padding: var(--s-2) var(--s-3); }
+  .chips { max-height: 84px; }
+  .searchSm { max-width: 150px; }
+}
+/* time of day + light toggles */
+.ctl { position: absolute; top: var(--s-5); right: var(--s-5); display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 2; max-width: calc(100% - 2 * var(--s-5)); }
+.ctlRow { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; padding: 4px; border-radius: 999px; background: rgba(8, 10, 14, 0.6); border: var(--bw) solid rgba(255, 255, 255, 0.1); backdrop-filter: blur(8px); }
+.ctlBtn { appearance: none; border: 0; border-radius: 999px; padding: 6px 12px; background: transparent; color: rgba(255, 255, 255, 0.6); font: var(--fw-body-m) 12px / 1 var(--font); cursor: pointer; white-space: nowrap; }
+.ctlBtn:hover { color: #fff; background: rgba(255, 255, 255, 0.08); }
+.ctlBtn[aria-checked="true"], .ctlBtn[aria-pressed="true"] { background: rgba(255, 255, 255, 0.92); color: #0b0d10; }
+@media (max-width: 760px) { .ctl { top: 64px; right: var(--s-3); left: var(--s-3); align-items: stretch; max-width: none; } .ctlRow { justify-content: center; border-radius: 16px; } }

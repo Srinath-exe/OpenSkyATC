@@ -60,14 +60,14 @@ function PhoneScreen({ onContinue }: { onContinue: () => void }) {
   const share = async () => {
     const url = window.location.origin + '/start'
     try {
-      if (navigator.share) { await navigator.share({ title: 'SKYCONTROL', text: 'Air traffic control at SFO, by voice, in the browser', url }); return }
+      if (navigator.share) { await navigator.share({ title: 'OpenATC', text: 'Air traffic control at SFO, by voice, in the browser', url }); return }
       await navigator.clipboard.writeText(url); setSent('Link copied')
     } catch { /* closed the share sheet */ }
   }
   return (
     <div className={cx(styles.root, styles.phone)} role="dialog" aria-modal="true" aria-labelledby="phone-title" data-testid="desktop-required" data-phone="true">
       <div className={styles.phoneCard}>
-        <p className={styles.phoneKicker}>SKYCONTROL · KSFO</p>
+        <p className={styles.phoneKicker}>OpenATC · KSFO</p>
         <h2 id="phone-title" className={styles.phoneTitle}>The tower is on a computer.</h2>
         <p className={styles.phoneText}>Strips, radar and the radio sit side by side and need a laptop-wide screen, a keyboard and a microphone. Send yourself the link and open it at a desk.</p>
         <div className={styles.phoneActions}>

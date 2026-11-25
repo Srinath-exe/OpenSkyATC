@@ -97,7 +97,7 @@ export function StatsPanel() {
   return (
     <GlassPanel
       ref={ref}
-      variant="glass-strong"
+      variant="solid"
       title="Score"
       titleSize="l"
       subtitle={`${icao} · session ${formatSimClock(time)} · seed ${sim.seed}`}

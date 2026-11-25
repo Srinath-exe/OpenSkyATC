@@ -6,11 +6,24 @@
   is served immutable for a year) or, for the speech model, in transformers.js's Cache Storage.
 */
 import { useSyncExternalStore } from 'react';
-import { L1Client, S1_MODEL_URL } from '@/lib/voice/l1';
+import { L1Client, S1_MODEL_URL, s1Url } from '@/lib/voice/l1';
+import { installedDir, releases, onReleases, setInstalledDir } from './updates';
 import { LS, EV_VOICE_ENGINE, readJson, writeJson } from '@/game/persist';
 import type { VoiceEngine } from '@/lib/voice/recognizer';
 
 export type ModelId = 's1' | 'stt' | 'tts';
+/** Where our speech model's files are served from, and the Cache Storage they are kept in once downloaded (the worker
+ *  public/voice/atc-asr-worker.js reads the same cache). */
+export const STT_DIR = process.env.NEXT_PUBLIC_STT_MODEL_BASE || '/models/stt/parakeet-110m-atc-v1/';   // a CDN can serve it (set the env)
+export const MODEL_CACHE = 'skycontrol-models-v1';
+/** The version this build ships of each model; the update channel (updates.ts) may name a newer one. */
+const BUILT: Record<ModelId, string> = { s1: S1_MODEL_URL.split('/').pop()!, stt: '2026-11-11', tts: 'v1.2' };
+const BUILT_ALIASES: Record<ModelId, string[]> = { s1: [], stt: ['v1'], tts: [] };
+/** The newest version of each model. */
+export const MODEL_VERSION: Record<ModelId, string> = new Proxy(BUILT, { get: (t, id: ModelId) => releases()[id]?.version ?? t[id] });
+/** The speech model's folder: the one installed on this device, else the newest. */
+export const sttDir = (): string => installedDir('stt') ?? newestSttDir();
+const newestSttDir = (): string => { const r = releases().stt; return r && r.version !== BUILT.stt ? `${r.dir}/` : STT_DIR; };
 export interface ModelInfo {
   id: ModelId;
   name: string;
@@ -31,11 +44,11 @@ export interface ModelInfo {
 
 export const MODELS: ModelInfo[] = [
   { id: 's1', name: 'Command model', role: 'The main model: turns what you said into the command the game carries out, and checks the readback', model: 'S1-2M (2 M parameters, RL-tuned on ATC transcripts)', sizeMB: 2.1, ramMB: 15, instead: 'Always on this device; without it the rules alone parse your words', files: [`${S1_MODEL_URL}/model.json`, `${S1_MODEL_URL}/model.bin`], hub: 'https://huggingface.co/srinath-exe/skycontrol-atc-command-2m' },
-  { id: 'stt', name: 'Speech to text', role: 'Hears your push-to-talk and writes it down, with the callsigns on frequency as hints', model: 'Moonshine base (61 M parameters, ONNX, WebGPU or WebAssembly)', sizeMB: 63, extra: 'plus transformers.js from the CDN (~2 MB)', ramMB: 350, instead: 'The server (SkyControl ATC-ASR 110M, our model fine-tuned on ATC speech): audio streams to this game\'s server, not stored. The server hears aviation words much better: use this device only when you need it offline', files: [] },
+  { id: 'stt', name: 'ATC-ASR', role: 'Our speech model, fine-tuned on ATC radio: hears your push-to-talk and writes it down. On this device it works offline and your voice never leaves it', model: 'parakeet-110m-atc v1 (110 M parameters, int8 ONNX, WebAssembly)', sizeMB: 136, extra: 'plus ONNX Runtime Web from the CDN (~11 MB)', ramMB: 450, instead: 'The same model on this game\'s server: audio streams there, is not stored, and the text is back ~0.3 s after you let go', files: ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'].map((f) => `${STT_DIR}${f}`) },
   { id: 'tts', name: 'Pilot voices', role: 'Speaks every pilot readback and request, four voices over a radio filter', model: 'Paradee-8M v1.2 (8 M parameters, int8 ONNX)', sizeMB: 8.2, extra: 'plus ONNX Runtime Web from the CDN (~11 MB)', ramMB: 90, instead: 'The browser\'s built-in voice (the same for every pilot)', files: ['/models/tts/paradee-8m-v1.2/config.json', '/models/tts/paradee-8m-v1.2/paradee_int8.onnx', '/models/tts/atc-lexicon-v1.json'] },
 ];
 
-export interface ModelState { state: 'none' | 'downloading' | 'ready' | 'error'; progress: number; bytes: number; loadMs: number | null; runMs: number | null; device: string; at: number | null; message: string }
+export interface ModelState { state: 'none' | 'downloading' | 'ready' | 'error'; progress: number; bytes: number; loadMs: number | null; runMs: number | null; device: string; at: number | null; message: string; version?: string }
 const KEY = 'skycontrol_models_v1';
 const blank = (): ModelState => ({ state: 'none', progress: 0, bytes: 0, loadMs: null, runMs: null, device: '', at: null, message: '' });
 let states: Record<ModelId, ModelState> = { s1: blank(), stt: blank(), tts: blank() };
@@ -100,9 +113,11 @@ export async function downloadModel(id: ModelId): Promise<boolean> {
   const t0 = performance.now();
   try {
     if (id === 's1') {
-      const bytes = await fetchAll(id, MODELS[0].files);
-      const c = new L1Client(); const tl = performance.now(); await c.load(); const loadMs = performance.now() - tl;
-      const r = await c.complete('united two one four climb and maintain five thousand', ['UAL214']); c.dispose();
+      // (a download is the newest: installed only once it has loaded and answered)
+      const dir = releases().s1?.dir ?? S1_MODEL_URL;
+      const bytes = await fetchAll(id, [`${dir}/model.json`, `${dir}/model.bin`]);
+      const c = new L1Client(dir); const tl = performance.now(); await c.load(); const loadMs = performance.now() - tl;
+      const r = await c.complete('united two one four climb and maintain five thousand', ['UAL214']); c.dispose(); setInstalledDir('s1', dir); window.dispatchEvent(new Event('skycontrol-s1-changed'));
       put(id, { state: 'ready', progress: 1, bytes, loadMs: Math.round(loadMs), runMs: Math.round(r.ms), device: 'WebAssembly', at: Date.now() });
     } else if (id === 'tts') {
       const bytes = await fetchAll(id, MODELS[2].files);
@@ -111,18 +126,45 @@ export async function downloadModel(id: ModelId): Promise<boolean> {
     } else {
       const files = new Map<string, { loaded: number; total: number }>();
       const audio = new Float32Array(16000 * 2); for (let i = 0; i < audio.length; i++) audio[i] = (Math.random() - 0.5) * 0.002;
-      const out = await onceWorker('/voice/stt-worker.js?model=base', [{ type: 'load' }, { type: 'transcribe', id: 1, audio, names: [] }], (m) => {
+      // fresh copies into Cache Storage (an update replaces the old files), then load once in the worker and time 2 s of audio
+      const dir = newestSttDir();
+      // (an update lives in another folder: the old one keeps working until the new one has loaded)
+      if (dir === sttDir()) { try { await caches.delete(MODEL_CACHE); } catch { /* none yet */ } }
+      const out = await onceWorker(`/voice/atc-asr-worker.js?dir=${encodeURIComponent(dir)}`, [{ type: 'load' }, { type: 'transcribe', id: 1, audio }], (m) => {
         files.set(m.file, { loaded: m.loaded, total: m.total }); let l = 0, t = 0; files.forEach((f) => { l += f.loaded; t += f.total; });
-        put(id, { progress: t ? Math.min(0.95, l / t * 0.95) : 0.05, bytes: l });
-      }, 600000);
+        put(id, { progress: Math.min(0.95, l / (MODELS[1].sizeMB * 1e6) * 0.95), bytes: l });
+      }, 900000);
+      setInstalledDir('stt', dir);
+      try { const c = await caches.open(MODEL_CACHE); for (const q of await c.keys()) if (!q.url.includes(dir.replace(/^https?:\/\/[^/]+/, ''))) await c.delete(q); } catch { /* nothing to clear */ }
+      if (readVoice().engine === 'local') window.setTimeout(() => window.dispatchEvent(new Event(EV_VOICE_ENGINE)), 0);   // the recogniser restarts on the new files
       let bytes = 0; files.forEach((f) => { bytes += f.total || f.loaded; });
       put(id, { state: 'ready', progress: 1, bytes: bytes || states.stt.bytes, loadMs: out[0]?.ms ?? null, runMs: out[1]?.ms ?? null, device: out[0]?.device ?? out[1]?.device ?? '', at: Date.now() });
     }
-    save(); return true;
+    put(id, { version: MODEL_VERSION[id] }); save(); return true;
   } catch (e) {
     put(id, { state: 'error', message: String((e as Error).message || e).slice(0, 160) }); return false;
   } finally { running.delete(id); }
 }
+
+/** Remove a model from this device: its files go, and whatever used it falls back (speech to the server, pilot voices
+ *  to the browser's). */
+export async function removeModel(id: ModelId): Promise<void> {
+  if (running.has(id)) return;
+  try {
+    if (id === 'stt') await caches.delete(MODEL_CACHE);
+    else { const c = await caches.open(MODEL_CACHE); for (const u of MODELS.find((m) => m.id === id)!.files) await c.delete(u); }
+  } catch { /* nothing stored */ }
+  states = { ...states, [id]: blank() }; setInstalledDir(id, null); emit(); save();
+  if (id === 'stt' && readVoice().engine === 'local') setVoiceEngine('server');
+  if (id === 'tts' && readVoice().pilot === 'neural') setPilotVoice('browser');
+}
+/** A newer version of a downloaded model is out. */
+export const updateAvailable = (id: ModelId, st: ModelState) => {
+  if (st.state !== 'ready') return false;
+  const r = releases()[id], newest = r?.version ?? BUILT[id], same = [newest, ...(r ? r.aliases : BUILT_ALIASES[id])];
+  return !same.includes(st.version ?? '');
+};
+if (typeof window !== 'undefined') onReleases(() => emit());   // a newer release arrived: every view of the models refreshes
 
 /** Round trip to this game's server (median of three small no-cache requests): what an on-device model saves per call. */
 export async function measureServer(): Promise<number | null> {

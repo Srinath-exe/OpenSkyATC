@@ -104,7 +104,7 @@ export class RadarCamera {
   /** Advance animations. `now` in ms (performance.now()), `followPos` = position of the followed aircraft if any. */
   step(now: number, dtMs: number, followPos: XY | null): void {
     if (this.zoomStart >= 0) {
-      const t = Math.min(1, (now - this.zoomStart) / ZOOM_MS);
+      const t = Math.max(0, Math.min(1, (now - this.zoomStart) / ZOOM_MS));
       this.pxPerNM = this.zoomFrom + (this.zoomTo - this.zoomFrom) * easeOut(t);
       if (this.anchor) {
         const k = this.k;
@@ -114,7 +114,7 @@ export class RadarCamera {
       if (t >= 1) { this.zoomStart = -1; this.anchor = null; this.pxPerNM = this.zoomTo; }
     }
     if (this.panStart >= 0) {
-      const t = Math.min(1, (now - this.panStart) / PAN_MS);
+      const t = Math.max(0, Math.min(1, (now - this.panStart) / PAN_MS));
       const e = easeInOut(t);
       this.x = this.panFrom.x + (this.panTo.x - this.panFrom.x) * e;
       this.y = this.panFrom.y + (this.panTo.y - this.panFrom.y) * e;

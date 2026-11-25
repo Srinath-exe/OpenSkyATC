@@ -3,6 +3,7 @@
   airport surfaces with generated markings. three.js frame: x = east, y = up, z = -north (metres).
 */
 import * as THREE from 'three';
+import { dressAsphalt, dressConcrete, dressPaint } from './groundTex';
 import type { World } from './world';
 import type { OsmAirport } from '@/lib/osmAirport';
 
@@ -195,7 +196,7 @@ export interface TerrainHandle { mesh: THREE.Mesh; uniforms: Record<string, THRE
  * tile wraps without a seam; the terrain shader reads it at three world scales.
  */
 let grassTex: THREE.CanvasTexture | null = null;
-function grassTexture(size = 256): THREE.CanvasTexture {
+export function grassTexture(size = 256): THREE.CanvasTexture {
   if (grassTex) return grassTex;
   let seed = 4242;
   const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
@@ -560,7 +561,11 @@ export function plateGeometry(atlas: TextAtlas, text: string, w: number, h: numb
 const SURFACE_MATS: THREE.MeshLambertMaterial[] = [];
 const PAVEMENT_MATS: THREE.MeshLambertMaterial[] = [];
 const MARKING_MATS: THREE.MeshLambertMaterial[] = [];
+let surfaceNight = 0;
+/** Surfaces made after the light was set take the same night level. */
+export function refreshSurfaceNight(): void { setSurfaceNight(surfaceNight); }
 export function setSurfaceNight(n: number): void {
+  surfaceNight = n;
   for (const m of SURFACE_MATS) m.emissive.setRGB(0.05 * n, 0.047 * n, 0.042 * n);
   for (const m of PAVEMENT_MATS) m.emissive.setRGB(0.014 * n, 0.014 * n, 0.016 * n);
   // paint is retro-reflective: it stays readable at night without glowing
@@ -576,15 +581,15 @@ export function markingLines(positions: number[], color: THREE.Color): THREE.Lin
   const l = new THREE.LineSegments(geo, mat); l.renderOrder = 5; l.frustumCulled = false; return l;
 }
 /** Apron concrete (slabs, joints, stains). */
-export function apronMaterial(): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color: PALETTE.concrete, side: THREE.DoubleSide, map: concreteTexture() }); SURFACE_MATS.push(m); return m; }
+export function apronMaterial(): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color: PALETTE.concrete, side: THREE.DoubleSide, map: concreteTexture() }); dressConcrete(m); SURFACE_MATS.push(m); return m; }
 /** Runway / taxiway asphalt. */
-export function asphaltMaterial(color: THREE.Color): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, map: asphaltTexture() }); PAVEMENT_MATS.push(m); return m; }
+export function asphaltMaterial(color: THREE.Color): THREE.MeshLambertMaterial { const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, map: asphaltTexture() }); dressAsphalt(m); PAVEMENT_MATS.push(m); return m; }
 /** Paint: lit by the sun like the pavement it is on (not self-lit), a little retro-reflection at night. */
 export function markingMaterial(color: THREE.Color): THREE.MeshLambertMaterial {
   // Paint lies ON the pavement: drawn after it (renderOrder), never written to depth and pulled toward the camera, so
   // layers of paint stack in draw order without fighting the surface or each other at any distance.
   const m = new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -60 });
-  m.userData.base = color.clone(); MARKING_MATS.push(m); return m;
+  m.userData.base = color.clone(); dressPaint(m); MARKING_MATS.push(m); return m;
 }
 
 export const TAXIWAY_WIDTH = 23;

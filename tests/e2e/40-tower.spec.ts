@@ -418,8 +418,10 @@ test.describe('tower', () => {
 
     // vacates on the right-hand (N) side: PILOT "exiting via N..", "runway vacated", LANDED scored, runway free
     await sim.advanceUntilOk(`s => s.radio.some(l => l.callsign === 'DAL6' && /runway ${RWY} vacated/.test(l.text))`, 200);
-    const exiting = await game.waitRadio(/exiting via (N\w+)/, { who: 'PILOT', callsign: 'DAL6' });
-    expect(exiting.text).toMatch(/exiting via N/);
+    // (named from the map data: at Heathrow the north stub of a crossing taxiway can carry the south one's name, e.g.
+    // S5W - the side is what the instruction fixes, checked below from where the aircraft is)
+    const exiting = await game.waitRadio(/exiting via (\w+)/, { who: 'PILOT', callsign: 'DAL6' });
+    expect(exiting.text).toMatch(/exiting via \w+/);
     await game.waitRadio(new RegExp(`runway ${RWY} vacated`), { who: 'PILOT', callsign: 'DAL6' });
     expect((await sim.runways()).find((r) => r.name === RWY)?.occupied).toBe(false);
     expect((await sim.events()).some((e) => e.type === 'score' && e.data?.type === 'score' && e.data.score.code === 'LANDED' && e.data.score.primary === 'DAL6')).toBe(true);

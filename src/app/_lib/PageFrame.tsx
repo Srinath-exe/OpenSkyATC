@@ -12,7 +12,7 @@ export interface PageFrameProps {
   crumb?: React.ReactNode;
   /** Nav right-hand cluster. */
   right?: React.ReactNode;
-  width?: 'wide' | 'narrow';
+  width?: 'wide' | 'narrow' | 'full';
   brandTestId?: string;
   children: React.ReactNode;
 }
@@ -26,16 +26,16 @@ export function PageFrame({ testId, crumb, right, width = 'wide', brandTestId = 
     <div className={s.root} data-testid={testId} data-ready={ready ? 'true' : undefined}>
       <header className={s.nav}>
         <div className={s.left}>
-          <button type="button" className={s.brand} data-testid={brandTestId} aria-label="SKYCONTROL home" onClick={() => router.push('/')}>
+          <button type="button" className={s.brand} data-testid={brandTestId} aria-label="OpenATC home" onClick={() => router.push('/')}>
             <LogoMark size={28} />
-            <span className={s.wordmark}>Skycontrol</span>
+            <span className={s.wordmark}>OpenATC</span>
           </button>
           {crumb ? <span className={s.crumb}>{crumb}</span> : null}
         </div>
         <div className={s.right}>{right}</div>
       </header>
       <div className={s.scroll}>
-        <div className={cx(s.inner, width === 'wide' ? s.wide : s.narrow)}>{children}</div>
+        <div className={cx(s.inner, width === 'full' ? s.full : width === 'wide' ? s.wide : s.narrow)}>{children}</div>
       </div>
     </div>
   );

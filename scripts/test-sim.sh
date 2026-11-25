@@ -14,12 +14,18 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 FILES=$(find "$DIR" -name '*.test.ts' | sort)
 if [ -z "$FILES" ]; then echo "no *.test.ts under $DIR"; exit 1; fi
-# shellcheck disable=SC2086
-npx tsc --module commonjs --moduleResolution node --target es2020 --lib es2022,dom,dom.iterable \
-  --outDir "$OUT" --rootDir . --skipLibCheck --esModuleInterop --strict --types node \
-  --resolveJsonModule --noEmitOnError false --ignoreConfig --ignoreDeprecations 6.0 $FILES
+# the "@/..." import alias (tsconfig paths): a throwaway tsconfig for the compile, and node_modules/@ -> src at run time
+FILES_JSON=$(echo "$FILES" | sed -e 's#^#"../#' -e 's#$#"#' | paste -sd, -)
+cat > .tmp/tsconfig.sim.json <<EOF
+{ "compilerOptions": { "module": "commonjs", "moduleResolution": "node", "target": "es2020", "lib": ["es2022", "dom", "dom.iterable"],
+  "outDir": "sim", "rootDir": "..", "skipLibCheck": true, "esModuleInterop": true, "strict": true, "types": ["node"], "jsx": "react-jsx",
+  "resolveJsonModule": true, "noEmitOnError": false, "baseUrl": "..", "paths": { "@/*": ["src/*"] }, "ignoreDeprecations": "6.0" },
+  "files": [$FILES_JSON] }
+EOF
+npx tsc -p .tmp/tsconfig.sim.json
 TSC_EXIT=$?
 if [ $TSC_EXIT -ne 0 ]; then echo "(tsc reported errors, exit $TSC_EXIT — running emitted tests anyway)"; fi
+mkdir -p "$OUT/node_modules" && ln -sfn ../src "$OUT/node_modules/@"
 JS=$(echo "$FILES" | sed -e "s#^#$OUT/#" -e 's#\.ts$#.js#')
 if [ -n "${TEST_FILTER:-}" ]; then
   # shellcheck disable=SC2086

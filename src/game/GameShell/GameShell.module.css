@@ -188,3 +188,32 @@
 .shell[data-minimal="true"] :global([data-testid="alert-stack"]),
 .shell[data-minimal="true"] :global([data-testid="world-toolbar"]),
 .shell[data-minimal="true"] :global([data-testid="world-wind"]) { display: none !important; }
+
+/* ── the board layout (data-layout="board"): the map runs edge to edge; the top bar (three pills), the flight board,
+   the flight card and the radio bar float over it. Classic keeps the grid above. ── */
+.shell[data-layout="board"] { grid-template-rows: minmax(0, 1fr); --top-inset: calc(var(--nav-h) + var(--float-gap)); --alerts-top: calc(var(--top-inset) + 44px); --bay-w: 310px; --cmd-w: 350px; }
+.shell[data-layout="board"][data-paused="true"] { --alerts-top: calc(var(--top-inset) + 44px + var(--pill-s) + var(--s-2)); }
+.shell[data-layout="board"] > nav { position: absolute; }
+.shell[data-layout="board"] .main { grid-row: 1; }
+.shell[data-layout="board"] .bay, .shell[data-layout="board"] .panel { top: var(--top-inset); }
+.shell[data-layout="board"] .view[data-view="radar"] > * { --radar-inset-top: var(--top-inset); }
+.shell[data-layout="board"] .logRow { position: absolute; left: calc(var(--bay-w) + 2 * var(--float-gap)); right: calc(var(--right-inset) + 60px); bottom: var(--float-gap); height: auto;
+  background: none; border: 0; box-shadow: none; display: flex; justify-content: center; pointer-events: none; }
+.shell[data-layout="board"] .logRow > * { pointer-events: auto; width: min(780px, 100%); }
+.shell[data-layout="board"][data-minimal="true"] .logRow { left: var(--float-gap); right: var(--float-gap); }
+.shell[data-layout="board"][data-minimal="true"] { grid-template-rows: minmax(0, 1fr); }
+.shell[data-layout="board"] .paused { top: calc(var(--top-inset) + 44px); }
+/* runway chips: under the clock, centred between the flight board and the flight card, wrapping if there are many */
+.shell[data-layout="board"] :global([data-testid="runway-bars"]) { top: var(--top-inset); bottom: auto; left: calc(var(--bay-w) + 2 * var(--float-gap)); right: calc(var(--right-inset) + 56px); transform: none; justify-content: center; flex-wrap: wrap; row-gap: 6px; }
+.shell[data-layout="board"] .toastHost { bottom: 136px; max-width: calc(100% - var(--bay-w) - var(--cmd-w) - var(--float-gap) * 4 - 60px); }   /* above the radio bar, never on the call field */
+
+/* Tower <-> Approach transition (GameShell: tr) */
+.radarLayer { position: absolute; inset: 0; }
+.mapLayer { position: absolute; inset: 0; }
+.mapLayer[data-hidden], .radarLayer[data-hidden] { visibility: hidden; pointer-events: none; }
+/* out of the clouds onto the radar: it settles from a little nearer; into the clouds over the airport: it rushes up */
+.radarLayer[data-tr="toRadar"][data-open] { animation: radarSettle 1.5s cubic-bezier(.16,.8,.24,1) both; }
+@keyframes radarSettle { from { transform: scale(1.5); } to { transform: none; } }
+.radarLayer[data-tr="toGround"] { animation: radarDive 1.2s cubic-bezier(.55,0,.85,.4) both; pointer-events: none; }
+@keyframes radarDive { from { transform: none; } to { transform: scale(2.6); } }
+@media (prefers-reduced-motion: reduce) { .radarLayer { animation: none !important; } }

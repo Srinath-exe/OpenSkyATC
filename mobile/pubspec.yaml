@@ -36,10 +36,15 @@ dependencies:
   cupertino_icons: ^1.0.8
   sherpa_onnx: ^2.0.1
   record: ^7.1.2
-  webview_flutter: ^4.14.1
-  webview_flutter_android: ^4.14.1
+  mapbox_maps_flutter: ^2.31.3
+  flutter_js: ^0.8.7
+  flutter_tts: ^4.2.5
+  shared_preferences: ^2.5.3
+  audioplayers: ^6.8.1
+  wakelock_plus: ^1.4.0
   path_provider: ^2.1.6
   crypto: ^3.0.8
+  flutter_soloud: 5.2.2
 
 dev_dependencies:
   flutter_test:
@@ -62,8 +67,35 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  fonts:
+    # the web game's faces (SIL Open Font License): DM Sans for text, DM Mono for data (callsigns, altitudes, times)
+    - family: DMSans
+      fonts:
+        - asset: assets/fonts/DMSans-Regular.ttf
+        - asset: assets/fonts/DMSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/DMSans-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/DMSans-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/DMSans-ExtraBold.ttf
+          weight: 800
+    - family: DMMono
+      fonts:
+        - asset: assets/fonts/DMMono-Regular.ttf
+        - asset: assets/fonts/DMMono-Medium.ttf
+          weight: 500
   assets:
     - assets/stt_models.json
+    - assets/core/
+    - assets/airports/
+    - assets/fleet/
+    - assets/fleet/thumbs/
+    - assets/landing/
+    - assets/landing/f/
+    - assets/learn/
+    - assets/sound/
+    - assets/s1/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -95,3 +127,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# flutter_soloud (the game's sound engine): WAV only, so no prebuilt Ogg / Opus / FLAC libraries are downloaded.
+hooks:
+  user_defines:
+    flutter_soloud:
+      no_xiph_libs: true

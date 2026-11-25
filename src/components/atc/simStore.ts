@@ -17,6 +17,8 @@
 //  Relative imports on purpose: this file is also compiled by the headless
 //  node:test runner (scripts/test-sim.sh) which ignores tsconfig path aliases.
 // ============================================================
+import { setVoiceStress } from '../../lib/tts/pilotSpeech';
+import { stressOf } from '../../lib/sim/persona';
 import { useRef, useSyncExternalStore } from 'react';
 import { SimEngine, AirspaceConfig, FIXED } from '../../lib/sim/engine';
 import { buildOsmAirport } from '../../lib/osmAirport';
@@ -29,8 +31,9 @@ import { advance, headingTo, NM_TO_M } from '../../lib/sim/projection';
 import type { XY } from '../../lib/sim/projection';
 import type { ILSRunway } from '../../lib/sim/ils';
 import type { WeightClass } from '../../lib/sim/aircraftDB';
-import { executeText, dispatch, fromEngine, actionCtxFromEngine, isSilent } from '../../lib/sim/dispatch';
+import { executeText, twoCallsIn, dispatch, fromEngine, actionCtxFromEngine, isSilent } from '../../lib/sim/dispatch';
 import type { DispatchResult } from '../../lib/sim/dispatch';
+import { telephony as phraseTelephony } from '../../lib/sim/phraseology';
 import { suggest as suggestText } from '../../lib/sim/commands';
 import type { Suggestion } from '../../lib/sim/commands';
 import { actionsFor as treeActionsFor, stepsFor as treeStepsFor, validate as treeValidate, toAst, undoable, canUndo } from '../../lib/sim/commandTree';
@@ -39,7 +42,7 @@ import { makeAst, isAircraftCommand } from '../../lib/sim/commandAst';
 import type { CommandAST, CommandResult } from '../../lib/sim/commandAst';
 import { bayFor } from '../../lib/sim/stage';
 import type { BayId } from '../../lib/sim/stage';
-import { EVENT_WHO } from '../../lib/sim/types';
+import { EVENT_WHO, POSITION_OWNER, type Position as RadioPosition } from '../../lib/sim/types';
 import type { Sector } from '../../lib/sim/types';
 import type {
   AircraftState, Alert, AlertSeverity, Atis, EmergencyType, PilotRequest, PlayerPosition, RunwayState, RunwayStatus,
@@ -48,6 +51,7 @@ import type {
 import { createTestApi } from '../../lib/sim/testApi';
 import type { AtcTestApi, CameraView, TestApiHost } from '../../lib/sim/testApi';
 import { sound } from './sound';
+import { namingAt, DEFAULT_SETTINGS, sanitizeSettings, sectorPatch, type Settings } from './simSettings';
 import * as persist from './persist';
 import { LlmAgent } from '../../lib/llm/agent';
 import type { LlmStatus } from '../../lib/llm/agent';
@@ -109,46 +113,8 @@ export interface Toast {
   scoreDelta?: number;
 }
 
-export interface Settings {
-  autoTower: boolean;
-  autoGround: boolean;
-  autoApproach: boolean;
-  autoMode: boolean;
-  autoHandoff: boolean;
-  strictFrequencies: boolean;
-  emergencyRate: 'off' | 'rare' | 'normal' | 'training';
-  groundTheme: 'satellite' | 'chart';
-  showRings: boolean;
-  difficulty: 'low' | 'normal' | 'high';
-  sound: boolean;
-  tts: boolean;
-  /** 0..1 master volume. */
-  volume: number;
-  /** Fixed pilot delay in sim seconds (1-8), null = realistic 2-4 s air / 4-8 s ground. */
-  pilotDelayS: number | null;
-  /** Pilots occasionally read back a wrong value (2 %). */
-  readbackErrors: boolean;
-  /** Phraseology variant; 'auto' = FAA for K-airports, ICAO elsewhere. */
-  region: 'auto' | 'ICAO' | 'FAA';
-  /** Drag-to-heading transmits without confirm. */
-  instantVectors: boolean;
-  /** Typed command line transmits without confirm. */
-  typedInstant: boolean;
-}
-
-/** Who works a sector: true = the AI, false = the player. Airfield = ground + tower (one controller), approach = approach + departure. */
-export function sectorAi(s: Pick<Settings, 'autoGround' | 'autoTower' | 'autoApproach'>, sector: Sector): boolean {
-  return sector === 'airfield' ? s.autoGround && s.autoTower : s.autoApproach;
-}
-export function sectorPatch(sector: Sector, ai: boolean): Partial<Settings> {
-  return sector === 'airfield' ? { autoGround: ai, autoTower: ai, autoMode: false } : { autoApproach: ai, autoMode: false };
-}
-
-export const DEFAULT_SETTINGS: Settings = {
-  autoTower: false, autoGround: false, autoApproach: false, autoMode: false, autoHandoff: true, strictFrequencies: false, emergencyRate: 'normal',
-  groundTheme: 'satellite', showRings: true, difficulty: 'normal', sound: true, tts: false, volume: 0.8,
-  pilotDelayS: null, readbackErrors: true, region: 'auto', instantVectors: false, typedInstant: true,
-};
+export type { Settings } from './simSettings';
+export { DEFAULT_SETTINGS, sectorAi, sectorPatch } from './simSettings';
 
 export interface StartConfig {
   icao: string;
@@ -163,6 +129,8 @@ export interface StartConfig {
   test?: boolean;
   /** Starting position tab. */
   position?: Position;
+  /** Names fixed for this session whatever the setting (the tutorial and the film speak of SFO's own). */
+  naming?: 'real' | 'simple';
 }
 
 export interface RadarBeacon { id: string; x: number; y: number; pron?: string; holdHeading?: number }
@@ -182,8 +150,10 @@ export interface ProjectorExtras {
   setCamera?: (cam: CameraView) => void;
   /** CSS size of the canvas element (emptySpot / hit-testing). */
   size?: () => { w: number; h: number } | null;
+  /** Fly so all these points are in view (clear of the side panels), optionally looking along `bearing`. */
+  frame?: (pts: XY[], opts?: { bearing?: number }) => void;
 }
-interface Projector { fn: (xy: XY) => { x: number; y: number } | null; centerOn: (xy: XY) => void; camera: () => CameraView | null; extras: ProjectorExtras }
+interface Projector { fn: (xy: XY, altFt?: number) => { x: number; y: number } | null; centerOn: (xy: XY) => void; camera: () => CameraView | null; extras: ProjectorExtras }
 
 /** Legacy key map kept for the old settings page; new code uses `persist.PERSIST_KEYS`. */
 export const LS_KEYS = {
@@ -214,22 +184,6 @@ const BAY_ORDER: Record<Position, BayId[]> = {
 const DISTANCE_BAYS = new Set<BayId>(['FINAL', 'SEQUENCE', 'ESTABLISHED', 'TO_TOWER', 'INBOUND']);
 
 /** Drop persisted values that are outside the Settings domain (old / edited / foreign blobs must not break `load()`). */
-function sanitizeSettings(s: Settings): Settings {
-  const out: Settings = { ...s };
-  const d = DEFAULT_SETTINGS as unknown as Record<string, unknown>;
-  const o = out as unknown as Record<string, unknown>;
-  for (const k of Object.keys(d)) {
-    if (d[k] == null) { if (o[k] != null && typeof o[k] !== 'number' && typeof o[k] !== 'string' && typeof o[k] !== 'boolean') o[k] = d[k]; continue; }   // nullable option (e.g. pilotDelayS)
-    if (o[k] == null || typeof o[k] !== typeof d[k] || (typeof o[k] === 'number' && !isFinite(o[k] as number))) o[k] = d[k];
-  }
-  if (!['low', 'normal', 'high'].includes(out.difficulty)) out.difficulty = DEFAULT_SETTINGS.difficulty;
-  if (!['satellite', 'chart'].includes(out.groundTheme)) out.groundTheme = DEFAULT_SETTINGS.groundTheme;
-  if (typeof out.volume === 'number') out.volume = Math.min(1, Math.max(0, out.volume));
-  // control is per sector now: the old per-tab auto mode is retired, ground and tower go to the AI together
-  out.autoMode = false;
-  if (out.autoGround !== out.autoTower) out.autoGround = out.autoTower = out.autoGround || out.autoTower;
-  return out;
-}
 
 /** Persisted LLM config: unknown / malformed fields fall back to the defaults. */
 function sanitizeLlm(raw: Partial<LlmConfig> | null): LlmConfig {
@@ -256,6 +210,19 @@ const SPAWN_TUNING: Record<Settings['difficulty'], { base: number; lo: number; h
   high: { base: 12, lo: 30, hi: 60, depShare: 0.5 },
 };
 const SPAWN_CAP_MAX = 24;
+
+/** What traffic the player wants: how many at once, how often, the departure share, which sizes. */
+export interface TrafficPrefs { limit: number | null; pace: 'quiet' | 'normal' | 'busy'; depShare: number | null; sizes: Array<'L' | 'M' | 'H' | 'S'> }
+const TRAFFIC_KEY = 'skycontrol_traffic_v1';
+const PACE: Record<TrafficPrefs['pace'], number> = { quiet: 0.6, normal: 1, busy: 1.6 };
+function loadTraffic(): TrafficPrefs {
+  const d: TrafficPrefs = { limit: null, pace: 'normal', depShare: null, sizes: ['L', 'M', 'H', 'S'] };
+  try {
+    const raw = localStorage.getItem(TRAFFIC_KEY); if (raw) return { ...d, ...JSON.parse(raw) };
+    const old = Number(localStorage.getItem('skycontrol_traffic_limit')); if (old >= 1) d.limit = old;   // the first version kept only the limit
+  } catch { /* no storage (server, private mode) */ }
+  return d;
+}
 
 const isBrowser = () => typeof window !== 'undefined';
 
@@ -298,6 +265,8 @@ class SimStore implements TestApiHost {
   rate: 1 | 2 | 4 = 1;
   /** Extra speed on top of the rate (the tutorial fast-forwards slow, uneventful stretches like a pushback). */
   boost = 1;
+  /** Called after every command (callsign, result, who): the tutorial resumes a game it held for a call. */
+  commandTaps = new Set<(callsign: string | null, result: DispatchResult, who: 'ATC' | 'LLM', text: string) => void>();
   private ffAcc = 0;
   position: Position = 'tower';
   selectedId: number | null = null;
@@ -363,6 +332,8 @@ class SimStore implements TestApiHost {
     if (this.persistedLoaded || typeof window === 'undefined') return;
     this.persistedLoaded = true;
     this.settings = sanitizeSettings(persist.loadSettings(DEFAULT_SETTINGS));
+    // pilot voices are on by default since 2026-11-16 (they were off): switch them on once for players who never chose
+    try { if (!localStorage.getItem('skycontrol_tts_default_on')) { localStorage.setItem('skycontrol_tts_default_on', '1'); if (!this.settings.tts) { this.settings = { ...this.settings, tts: true }; persist.saveSettings?.(this.settings) } } } catch { /* storage blocked */ }
     this.llm = sanitizeLlm(persist.readJson<Partial<LlmConfig> | null>(persist.PERSIST_KEYS.llm, null));
     this.highScore = persist.loadHighScore();
     sound.setEnabled(this.settings.sound);
@@ -485,9 +456,23 @@ class SimStore implements TestApiHost {
       this.autoSpawn = !testMode && spawn !== 'none';
       // the live game starts with the aprons populated (airlines.ts profiles); deterministic test scenarios do not
       if (!testMode) e.populateParked();
-      if (spawn !== 'none') {
+      this.applyTraffic();
+      this.opening = [];
+      if (spawn !== 'none' && !testMode) {
+        // a live shift opens quietly: one departure now, the rest one at a time (no burst of calls in the first minute)
+        // no two openings alike: how many are ready to go, in what order the rest turn up and when
+        const ready = chance(0.75) ? 1 : 2; for (let i = 0; i < ready; i++) e.spawnDeparture();
+        const rest: Array<'dep' | 'arr'> = ['arr', 'arr', 'arr', 'dep', 'dep', 'dep']; for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(rf(0, i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+        this.opening = rest.slice(0, Math.floor(rf(4, 7)));
+        this.nextOpeningAt = e.time + rf(15, 60);
+      } else if (spawn !== 'none') {
         for (let i = 0; i < 4; i++) e.spawnDeparture();
         for (let i = 0; i < 3; i++) e.spawnArrival();
+      }
+      if (spawn !== 'none') {
+        // a live session opens with one already on final (the rest come in from the TMA edge: the first of those took
+        // some 20 minutes to land, and the tower sat with nothing arriving)
+        if (!testMode) e.spawnArrivalShortFinal({ distM: rf(8500, 19000) });
         this.nextSpawnAt = e.time + rf(SPAWN_TUNING[this.settings.difficulty].lo, SPAWN_TUNING[this.settings.difficulty].hi) / profileOf(icao).busy;
       }
       this.pushLine({ who: 'SYS', at: e.time, text: `${ATC_AIRPORTS[icao]?.name ?? air.icao} — ${air.gates.length} stands, ${air.runways.length} runways${ap ? `, ${ap.airspace.radiusNM} NM TMA` : ', no radar airspace'} online${testMode ? ` · test mode · seed ${seed}` : ''}` });
@@ -524,7 +509,7 @@ class SimStore implements TestApiHost {
   }
 
   private teardown(): void {
-    this.stop();
+    this.stop(); this.lifeMoves = null;
     if (this.engine) this.recordSession();
     this.engine = null; this.osm = null; this.airspace = null; this.radar = null;
     this.selectedId = null; this.hoveredId = null; this.lastCallsign = null;
@@ -643,16 +628,55 @@ class SimStore implements TestApiHost {
     if (evs.length) this.batch(() => this.routeEvents(evs));
   }
 
+  /** The traffic the player wants (Settings > Traffic, and the pause menu's limit), kept on this device. */
+  traffic: TrafficPrefs = loadTraffic();
+  setTraffic(patch: Partial<TrafficPrefs>): void {
+    this.traffic = { ...this.traffic, ...patch };
+    try { localStorage.setItem(TRAFFIC_KEY, JSON.stringify(this.traffic)) } catch { /* storage blocked */ }
+    this.applyTraffic(); this.emit();
+  }
+  private applyTraffic(): void { const e = this.engine; if (e) e.spawnSizes = this.traffic.sizes.length && this.traffic.sizes.length < 4 ? new Set(this.traffic.sizes) : null; }
+  /** The player's limit on aircraft at once; null = no limit beyond the difficulty's own. */
+  get trafficLimit(): number | null { return this.traffic.limit; }
+  setTrafficLimit(n: number | null): void { this.setTraffic({ limit: n }); }
+  /** Aircraft that count toward the limit: everything the game moves (not the parked airframes on the aprons). */
+  private lifeMoves: number | null = null;
+  /** A new player's ceiling on aircraft at once: three until they have handled a few, then four, then five, then whatever
+   *  they chose. Only in a live game; a limit the player set themselves wins. */
+  newcomerLimit(): number | null {
+    if (this.testMode || !this.raf || !this.engine) return null;
+    if (this.lifeMoves == null) this.lifeMoves = persist.loadSessionHistory().reduce((n, r) => n + (r.movements || 0), 0);
+    const n = this.lifeMoves + this.engine.stats.movements;
+    return n < 4 ? 3 : n < 10 ? 4 : n < 18 ? 5 : null;
+  }
+  private underLimit(e: SimEngine): boolean {
+    const lim = this.trafficLimit ?? this.newcomerLimit();
+    return lim == null || e.aircraft.filter((a) => a.phase !== 'arrived' && a.phase !== 'departed').length < lim;
+  }
+  /** The shift's opening traffic still to come, one at a time. */
+  private opening: Array<'dep' | 'arr'> = [];
+  private nextOpeningAt = 0;
   private autoSpawnTick(e: SimEngine): void {
+    if (this.opening.length) {
+      if (e.time >= this.nextOpeningAt && this.underLimit(e)) {
+        const k = this.opening.shift()!
+        const ok = k === 'dep' ? e.spawnDeparture() : e.spawnArrival();
+        if (!ok) { if (k === 'dep') e.spawnArrival(); else e.spawnDeparture(); }
+        this.nextOpeningAt = e.time + rf(25, 45);
+        // the regular flow starts after the opening has played out
+        if (!this.opening.length) this.nextSpawnAt = Math.max(this.nextSpawnAt, e.time + rf(30, 50));
+      }
+      return;
+    }
     const tune = SPAWN_TUNING[this.settings.difficulty];
     if (e.time < this.nextSpawnAt) return;
     const cap = Math.min(SPAWN_CAP_MAX, tune.base + Math.floor(e.skill / 2));
-    if (e.aircraft.length < cap) {
-      const dep = chance(tune.depShare);
+    if (e.aircraft.length < cap && this.underLimit(e)) {
+      const dep = chance(this.traffic.depShare ?? tune.depShare);
       const ok = dep ? e.spawnDeparture() : e.spawnArrival();
       if (!ok) { if (dep) e.spawnArrival(); else e.spawnDeparture(); }
     }
-    this.nextSpawnAt = e.time + rf(tune.lo, tune.hi) / profileOf(e.air.icao).busy;   // hubs turn traffic faster
+    this.nextSpawnAt = e.time + rf(tune.lo, tune.hi) / profileOf(e.air.icao).busy / PACE[this.traffic.pace] * (this.newcomerLimit() === 3 ? 1.6 : 1);   // hubs turn traffic faster
   }
 
   private persistHighScore(force: boolean): void {
@@ -678,12 +702,13 @@ class SimStore implements TestApiHost {
   private route(ev: SimEvent): void {
     const who = ev.who ?? EVENT_WHO[ev.type];
     const d = ev.data;
+    if (ev.type === 'info' && ev.message.startsWith('Two stations called')) sound.play('blocked');
     switch (ev.type) {
       case 'phase': case 'stage': case 'removed': case 'landing_clearance':
         return;                                                        // UI reads these from state
       case 'request': {
         if (d?.type === 'request') {
-          if (d.change === 'raised' || d.change === 'recalled') { this.pushLine({ who: 'PILOT', at: ev.at, text: ev.message, callsign: ev.callsign, position: ev.position }); sound.play('request'); this.speak(ev.message, 'PILOT', ev.callsign); }
+          if (d.change === 'raised' || d.change === 'recalled') { this.pushLine({ who: 'PILOT', at: ev.at, text: ev.message, callsign: ev.callsign, position: ev.position }); if (this.onMyRadio(ev.position)) sound.play('request'); this.speak(ev.message, 'PILOT', ev.callsign, ev.position); }
           return;
         }
         break;
@@ -692,7 +717,7 @@ class SimStore implements TestApiHost {
         this.pushLine({ who: 'PILOT', at: ev.at, text: ev.message, callsign: ev.callsign, position: ev.position, status: d?.type === 'readback' ? readbackStatus(d.status) : undefined });
         this.closeUndo(ev.callsign, d?.type === 'readback' ? d.status : 'ok');
         if (d?.type === 'readback' && (d.status === 'unable' || d.status === 'mismatch')) sound.play('error'); else sound.play('readback');
-        this.speak(ev.message, 'PILOT', ev.callsign);
+        this.speak(ev.message, 'PILOT', ev.callsign, ev.position);
         return;
       }
       case 'transmission': {
@@ -708,6 +733,7 @@ class SimStore implements TestApiHost {
           if (d.who === 'player') sound.play('transmit');
           // the pilot's readback is already written (engine.onTransmission) and due in 2-8 s: voice it now
           if (res.readback && ev.callsign && ev.callsign !== 'SYSTEM' && this.settings.tts && this.settings.sound && !this.testMode) {
+            this.voiceStress(ev.callsign);
             sound.prefetchPilot(res.readback, { callsign: ev.callsign, variant: this.engine?.settings.region });
           }
           return;
@@ -759,7 +785,7 @@ class SimStore implements TestApiHost {
             this.pushToast({ kind: 'success', text: `Emergency resolved · ${ev.callsign}`, duration: 4000, callsigns: [ev.callsign] });
             sound.play('resolve');
           }
-          if (line === 'PILOT') this.speak(ev.message, 'PILOT', ev.callsign);
+          if (line === 'PILOT') this.speak(ev.message, 'PILOT', ev.callsign, ev.position);
           return;
         }
         break;
@@ -782,7 +808,7 @@ class SimStore implements TestApiHost {
     }
     // generic routing by who
     this.pushLine({ who, at: ev.at, text: ev.message, callsign: ev.callsign !== 'SYSTEM' ? ev.callsign : undefined, position: ev.position });
-    if (who === 'PILOT') this.speak(ev.message, 'PILOT', ev.callsign);
+    if (who === 'PILOT') this.speak(ev.message, 'PILOT', ev.callsign, ev.position);
   }
 
   private upsertAlertToast(al: Alert, change: 'raised' | 'updated'): void {
@@ -798,7 +824,19 @@ class SimStore implements TestApiHost {
     this.pushToast({ kind, severity: al.severity, text: al.title, detail: al.detail, duration, alertId: al.id, callsigns: [...al.subjects] });
   }
 
-  private speak(text: string, who: 'PILOT' | 'ATC', callsign?: string): void {
+  /** The crew's voice follows how pressed it is (an emergency, low fuel, a long wait). */
+  private voiceStress(callsign?: string): void { const a = callsign ? this.engine?.find(callsign) : null; if (a) setVoiceStress(a.callsign, stressOf(a)); }
+  /** Is this frequency the one the player's seat listens to? Tower: tower (and ground, if they ask for it in Settings >
+   *  Audio). Approach: approach and departure. */
+  private onMyRadio(p: RadioPosition | undefined): boolean {
+    if (!p) return true;
+    const owner = POSITION_OWNER[p], seat = this.playerPosition(); if (owner == null) return false;
+    return seat === 'approach' ? owner === 'approach' : owner === seat || (owner === 'ground' && this.settings.hearGround);
+  }
+  private speak(text: string, who: 'PILOT' | 'ATC', callsign?: string, position?: RadioPosition): void {
+    // (the answer to the player's own last call is always heard: "contact departure" is read back as the flight leaves)
+    if (!this.onMyRadio(position) && !(callsign && callsign === this.lastCallsign)) return;
+    if (who === 'PILOT') this.voiceStress(callsign);
     if (this.settings.tts && this.settings.sound && !this.testMode) sound.speak(text, { who, callsign, variant: this.engine?.settings.region });
   }
 
@@ -837,19 +875,35 @@ class SimStore implements TestApiHost {
     const trimmed = text.trim();
     if (!e) return { ok: false, code: 'not_implemented', transmission: '', readback: '', reason: 'No airport loaded', warnings: [] };
     if (!trimmed) return { ok: false, code: 'invalid_param', transmission: '', readback: '', reason: 'Empty command', warnings: [] };
+    // two aircraft in one breath (spokenEdits.ts twoCalls): one after the other
+    const calls = trimmed.includes(' | ') ? trimmed.split(' | ') : opts.who === 'LLM' ? null : twoCallsIn(e, trimmed, this.parseCtx());
+    if (calls && calls.length > 1 && calls.length <= 3) { let last: DispatchResult | null = null; for (const c of calls) last = this.command(c, opts); return last!; }
     const position = opts.position ?? this.position;
     const who = opts.who ?? 'ATC';
     const ctx = who === 'LLM' ? fromEngine(e, { lastCallsign: null, position }) : this.parseCtx();
     this.commandWho = who;
     let out: DispatchResult;
     try {
-      const { parse, result } = executeText(e, trimmed, ctx, { position });
+      const { parse, result, ask } = executeText(e, trimmed, ctx, { position });
       if (parse.callsign && who === 'ATC') this.lastCallsign = parse.callsign;
+      // a call the pilot could not make out (it heard its callsign, not the rest): it asks for it again, as on the radio
+      if (!parse.ok && who === 'ATC' && parse.callsign && e.find(parse.callsign)) this.sayAgain(parse.callsign, ask);
       this.afterDispatch(result, parse.callsign ?? null, trimmed);
       out = result;
+      for (const tap of this.commandTaps) { try { tap(parse.callsign ?? null, result, who, trimmed); } catch (err) { console.error(err); } }
     } finally { this.commandWho = 'ATC'; }
     if (who === 'ATC' && this.llm.record) this.llmAgent.recordPlayer(this.playerPosition(), trimmed, out.ok, out.ok ? out.readback : (out.reason ?? out.code));
     return out;
+  }
+  /** The pilot asks the controller to repeat: a beat after the call, in the comm log and on the radio. */
+  private sayAgain(cs: string, ask?: string): void {
+    const e = this.engine; if (!e || this.testMode) return;
+    setTimeout(() => {
+      if (this.engine !== e || !e.find(cs)) return;
+      const text = ask ?? `Say again, ${phraseTelephony(cs, e.settings.region)}.`;
+      this.pushLine({ who: 'PILOT', at: e.time, text, callsign: cs, position: this.playerPosition() });
+      this.speak(text, 'PILOT', cs); this.emit();
+    }, 900);
   }
   private playerPosition(): PlayerPosition { return this.position === 'approach' ? 'approach' : this.position === 'ground' ? 'ground' : 'tower'; }
   /** The LLM's advice (advise mode): shown in the comm log as an LLM line the player can type or click. */
@@ -1014,6 +1068,7 @@ class SimStore implements TestApiHost {
     e.settings.autoHandoff = s.autoHandoff;
     e.settings.arrivalFlow = !this.testMode;   // the centre meters arrivals in a real session; test scenarios spawn what they ask for
     e.settings.strictFrequencies = s.strictFrequencies;
+    e.settings.radioRealism = s.radioRealism && !this.testMode;
     e.settings.personas = !this.testMode;   // crews with characters in a real session; scripted scenarios stay exact
     if (!this.testMode) {
       e.settings.emergencyRate = s.emergencyRate;
@@ -1023,6 +1078,8 @@ class SimStore implements TestApiHost {
       e.settings.pilotDelayOverride = s.pilotDelayS;
     }
     if (s.region !== 'auto') e.settings.region = s.region;
+    const names = this.lastConfig?.naming ?? (this.testMode ? 'real' : namingAt(s.naming, this.icao));
+    if (e.setNaming(names) && e.time > 1) this.pushLine({ who: 'SYS', at: e.time, text: `Taxiway and stand names: ${names}. Every label, clearance and call now uses them.` });
   }
 
   ackAlert(id: string): boolean {
@@ -1139,7 +1196,15 @@ class SimStore implements TestApiHost {
   }
   // shallow copies: the fleet mutates vehicles in place, and useSim's shallow-equal would otherwise miss a state change (recall / hold) until the next tick
   vehicles(): Vehicle[] { return this.cached('vehicles', () => this.engine ? this.engine.fleet.list().map(v => ({ ...v })) : []); }
-  alerts(): Alert[] { return this.cached('alerts', () => this.engine ? [...this.engine.activeAlerts()] : []); }
+  /** The alerts that are the player's: anything about a flight in a sector the AI works stays with the AI, except an
+   *  emergency (the tower must know about a Mayday on approach). */
+  alerts(): Alert[] { return this.cached('alerts', () => this.engine ? this.engine.activeAlerts().filter((x) => this.alertIsMine(x)) : []); }
+  private alertIsMine(x: Alert): boolean {
+    const e = this.engine; if (!e || x.kind === 'emergency') return true;
+    const acs = x.subjectIds.map((id) => e.byId(id)).filter((a): a is AircraftState => !!a);
+    if (!acs.length) return true;
+    return acs.some((a) => { const owner = POSITION_OWNER[a.onFrequency]; return owner != null && !e.aiOn(owner); });
+  }
   allAlerts(): Alert[] { return this.cached('allAlerts', () => this.engine ? [...this.engine.alerts.list()] : []); }
   atis(): Atis | null { return this.cached('atis', () => { try { return this.engine ? this.engine.weather.atis() : null; } catch { return null; } }); }
   weather(): WeatherState | null { return this.cached('weather', () => this.engine ? this.engine.wx() : null); }
@@ -1180,7 +1245,7 @@ class SimStore implements TestApiHost {
   // ═══════════════════════════════════════════════════════════════════════════
   //  Render hooks (canvas views register; test API + panels use)
   // ═══════════════════════════════════════════════════════════════════════════
-  registerProjector(kind: ProjectorKind, fn: (xy: XY) => { x: number; y: number } | null, centerOn: (xy: XY) => void, camera: () => CameraView | null, extras: ProjectorExtras = {}): () => void {
+  registerProjector(kind: ProjectorKind, fn: (xy: XY, altFt?: number) => { x: number; y: number } | null, centerOn: (xy: XY) => void, camera: () => CameraView | null, extras: ProjectorExtras = {}): () => void {
     const p: Projector = { fn, centerOn, camera, extras };
     this.projectors[kind] = p;
     this.emit();
@@ -1202,9 +1267,10 @@ class SimStore implements TestApiHost {
     if (this.projectors[want]) return want;
     return this.projectors.radar ? 'radar' : this.projectors.ground ? 'ground' : null;
   }
-  screenProject(xy: XY): { x: number; y: number } | null {
+  /** Where a point shows on screen; `altFt` for one in the air (the 3D map draws it above its ground position). */
+  screenProject(xy: XY, altFt = 0): { x: number; y: number } | null {
     const p = this.activeProjector(); if (!p) return null;
-    try { return p.fn(xy); } catch { return null; }
+    try { return p.fn(xy, altFt); } catch { return null; }
   }
   screenPos(id: number): { x: number; y: number } | null {
     const a = this.engine?.byId(id); if (!a) return null;
@@ -1214,8 +1280,23 @@ class SimStore implements TestApiHost {
     const p = this.activeProjector(); if (!p) return;
     try { p.centerOn(xy); } catch { /* view not ready */ }
   }
+  /** The camera to a flight. On the 3D map, which cannot leave the airport: an airborne departure leaves the camera
+   *  where it is; an airborne arrival shows the runway it will land on; a landed arrival is framed with its stand. */
   centerOn(id: number): void {
-    const a = this.engine?.byId(id); if (!a) return;
+    const a = this.engine?.byId(id), e = this.engine; if (!a || !e) return;
+    const p = this.activeProjector()
+    if (p && !this.projectors.radar && p.extras.frame) {
+      const onGround = ['parked', 'startup', 'pushback', 'taxi', 'hold_short', 'lineup', 'rollout', 'arrived'].includes(a.phase) || a.altitude < 30
+      if (!onGround) {
+        if (a.plan.kind !== 'arrival') return
+        const rwy = a.assignedRunway ?? a.plan.runway, thr = rwy ? e.thresholdXY(rwy) : null, end = rwy ? e.runwayByEnd(rwy) : null
+        if (thr && end) { const h = end.end.trueHdg * Math.PI / 180; p.extras.frame([{ x: thr.x - Math.sin(h) * 400, y: thr.y - Math.cos(h) * 400 }, { x: thr.x + Math.sin(h) * 1600, y: thr.y + Math.cos(h) * 1600 }], { bearing: end.end.trueHdg }); return }
+        return
+      }
+      const st = a.plan.kind === 'arrival' && a.phase !== 'arrived' ? (a.reservedStand ?? a.plan.gateRef) : null
+      const g = st ? e.gateByRef(st) : null
+      if (g) { p.extras.frame([a.pos, e.gateXY(g)]); return }
+    }
     this.centerOnXY(a.pos);
   }
   camera(): CameraView | null {

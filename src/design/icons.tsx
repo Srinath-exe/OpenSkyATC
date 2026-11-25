@@ -1,5 +1,5 @@
 'use client'
-/* SKYCONTROL iconography (01 A6). Lucide line icons at strokeWidth 1.5 (absolute), plus custom ATC glyphs.
+/* OpenATC iconography (01 A6). Lucide line icons at strokeWidth 1.5 (absolute), plus custom ATC glyphs.
    Never use Unicode/emoji glyphs in the UI; use <Icon name=... size=... /> or the named exports below. */
 import * as React from 'react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
@@ -9,7 +9,8 @@ import {
   LocateFixed, Map as MapIcon, Plane, Navigation, Volume2, VolumeX, Pause, Play, ArrowUp, ArrowDown, ArrowLeft, ArrowRight,
   RotateCcw, RotateCw, CornerDownLeft, Undo2, MousePointerClick, Terminal, Check, Info, CircleAlert, Wifi, Radio, Gauge, Layers,
   Eye, EyeOff, Circle, Square, Zap, Timer, Thermometer, CloudFog, Droplets, MapPin, Move, Crosshair, Compass, Copy, Trash2, Filter,
-  ListFilter, Menu, MoreHorizontal, Loader, HelpCircle, ExternalLink, Users, Building2, Route, Fuel as FuelIcon, Snowflake, Ambulance as AmbulanceIcon,
+  ListFilter, Menu, MoreHorizontal, Loader, HelpCircle, ExternalLink, Users, Building2, Route, Fuel as FuelIcon, Snowflake, Ambulance as AmbulanceIcon, Keyboard,
+  Mic, MicOff, Video, Camera, SquareMousePointer, MessageSquareWarning, ImagePlus, MonitorUp, Inbox,
 } from 'lucide-react'
 
 export const ICON_STROKE = 1.5
@@ -92,6 +93,16 @@ export const ICONS = {
   fuel: FuelIcon,
   snowflake: Snowflake,
   ambulance: AmbulanceIcon,
+  keyboard: Keyboard,
+  mic: Mic,
+  'mic-off': MicOff,
+  video: Video,
+  camera: Camera,
+  'square-mouse-pointer': SquareMousePointer, // highlight a part of the screen
+  report: MessageSquareWarning,               // report something on this screen
+  'image-plus': ImagePlus,
+  'monitor-up': MonitorUp,
+  inbox: Inbox,
 } as const satisfies Record<string, LucideIcon>
 
 export type IconName = keyof typeof ICONS
@@ -304,23 +315,7 @@ export function Windsock(props: GlyphProps) {
   )
 }
 
-/** Logo mark: five diagonal rounded bars in a rounded square (A6). */
-export function LogoMark({ size = 28, opacity = 1, testId, ...rest }: { size?: number; opacity?: number; testId?: string } & React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 28 28" aria-hidden="true" data-testid={testId} style={{ opacity, color: 'var(--text-1)' }} {...rest}>
-      <defs>
-        <clipPath id="ds-logo-clip"><rect x="0" y="0" width="28" height="28" rx="8" /></clipPath>
-      </defs>
-      <g clipPath="url(#ds-logo-clip)" stroke="currentColor" strokeWidth="3" strokeLinecap="round" transform="rotate(-45 14 14)">
-        <line x1="14" y1="-4" x2="14" y2="32" transform="translate(-8 0)" />
-        <line x1="14" y1="-4" x2="14" y2="32" transform="translate(-4 0)" />
-        <line x1="14" y1="-4" x2="14" y2="32" />
-        <line x1="14" y1="-4" x2="14" y2="32" transform="translate(4 0)" />
-        <line x1="14" y1="-4" x2="14" y2="32" transform="translate(8 0)" />
-      </g>
-    </svg>
-  )
-}
+export { LogoMark } from './LogoMark'
 
 export const VEHICLE_GLYPHS = {
   aircraft: AircraftTop,

@@ -38,16 +38,20 @@ import type {
 } from './commandAst';
 import { IMMEDIATE_KINDS, describe, isAircraftCommand, isSystemCommand } from './commandAst';
 import type { PhraseCtx } from './phraseology';
-import { magneticHeading, readback as phraseReadback, transmission as phraseTransmission, unableLine } from './phraseology';
+import { groupNumber, magneticHeading, readback as phraseReadback, telephony as telephonyOf, transmission as phraseTransmission, unableLine } from './phraseology';
 import { ledgerOf } from './ledger';
 import { mindOf } from './pilotmind';
+import { TaxiMind, sameTaxi, taxiMindOf } from './taximind';
+import { airMindOf } from './airmind';
+import { crewLifeOf } from './crewlife';
+import { answerWith, twoCalls } from './spokenEdits';
 import type { SimEngine } from './engine';
 import { personaOf, stressOf, overloadChance } from './persona';
 import { rng } from './rng';
 import type { ActionCtx, FixInfo, NearbyAircraft, RunwayInfo, StandInfo, ValidationResult, VehicleInfo } from './commandTree';
 import { REASONS, actionsFor, validateAst } from './commandTree';
 import type { ParseAircraft, ParseCtx, ParseErrorCode, ParseResult } from './commands';
-import { parseCommand } from './commands';
+import { parseCommand, resolveCallsign, tokenize } from './commands';
 import { headingTo, NM_TO_M, dist as xyDist } from './projection';
 import { isAirborne } from './aircraft';
 
@@ -70,7 +74,7 @@ export interface EngineCommandApi {
   // ── ground ──
   cmdStartup(a: AircraftState, expectRunway: string | null): EngineOutcome;
   cmdPushback(a: AircraftState, dir: PushDir, expectRunway: string | null, withStartup: boolean, tailTo: string | null): EngineOutcome;
-  cmdTaxi(a: AircraftState, dest: TaxiDest, via: string[], auto: boolean, holdShortOf: HoldShortTarget | null, cross: string[], expedite: boolean): EngineOutcome;
+  cmdTaxi(a: AircraftState, dest: TaxiDest, via: string[], auto: boolean, holdShortOf: HoldShortTarget | null, cross: string[], expedite: boolean, limit?: 'hold' | 'crossed' | null): EngineOutcome;
   cmdHoldShort(a: AircraftState, of: HoldShortTarget): EngineOutcome;
   cmdHoldPosition(a: AircraftState): EngineOutcome;
   cmdContinue(a: AircraftState, holdShortOf: HoldShortTarget | null): EngineOutcome;
@@ -182,7 +186,7 @@ export function applyToEngine(engine: EngineCommandApi, ast: CommandAST, a: Airc
   switch (ast.kind) {
     case 'startup': return engine.cmdStartup(a, ast.expectRunway);
     case 'pushback': return engine.cmdPushback(a, ast.dir, ast.expectRunway, ast.startup, ast.tailTo);
-    case 'taxi': return engine.cmdTaxi(a, ast.dest, ast.via, ast.auto, ast.holdShortOf, ast.cross, ast.expedite);
+    case 'taxi': return engine.cmdTaxi(a, ast.dest, ast.via, ast.auto, ast.holdShortOf, ast.cross, ast.expedite, ast.limit ?? null);
     case 'holdShort': return engine.cmdHoldShort(a, ast.of);
     case 'holdPosition': return engine.cmdHoldPosition(a);
     case 'continue': return engine.cmdContinue(a, ast.holdShortOf);
@@ -431,6 +435,47 @@ export function dispatch(engine: EngineCommandApi, ast: CommandAST, opts: Dispat
   if (g) return fail(g.code, g.reason ?? g.code);
   // 3. strict frequency (R13)
   if (a && opts.who !== 'ai' && !opts.ignoreFrequency && !engine.onPlayerFrequency(a)) return fail('not_on_frequency', REASONS.R13);
+  // 3b. the crew's side of a taxi (taximind.ts) or of an instruction in the air (airmind.ts): before anything is refused on the screen the pilot answers on the radio,
+  // with the way they would take instead; "approved" gives them that, "negative" has them do as told (or wait, when they cannot)
+  if (a && opts.who !== 'ai' && opts.memory !== false) {
+    const led = ledgerOf(engine), sim = engine as unknown as SimEngine, open = led.pending(a.callsign, engine.time), name = safe(() => engine.phraseCtx(a).telephony(a.callsign), a.callsign);
+    const say = (readback: string, ok: boolean, code: ResultCode): DispatchResult => {
+      const pc = engine.phraseCtx(a);
+      return finish({ ok, code, transmission: safe(() => phraseTransmission(ast, pc), describe(ast)), readback, reason: ok ? undefined : readback, warnings, readbackAt: engine.time + readbackDelay(engine, a, ast.kind, undefined) });
+    };
+    const taxiQ = open && /^(taxi|air|cs)_/.test(open.rule) ? open : null;
+    const again = (x: SingleAircraftCommand, y: SingleAircraftCommand) => (x.kind === 'taxi' && y.kind === 'taxi' ? sameTaxi(x, y) : x.kind === y.kind && describe(x) === describe(y));
+    const req = a.requests.find(r => r.answeredAt == null);
+    // "affirm" to a report or to "confirm cleared to land?" of one that is: an answer; to "request pushback" it is not a clearance
+    const heard = req && (['concern', 'with_you', 'radio_check', 'runway_vacated', 'going_around'].includes(req.kind) || (req.kind === 'confirm_cleared' && a.landingCleared));
+    if (ast.kind === 'roger' && ast.yes && !open && !heard) return fail('nothing_pending', 'Approve what? Say the instruction');
+    // "was that for us?": only a clear yes has them do it; no, or anything else, and they carry on as they were
+    if (taxiQ?.rule === 'cs_similar' && (ast.kind === 'unable' || ast.kind === 'disregard' || (ast.kind === 'roger' && !ast.yes))) {
+      led.close(a.callsign); safe(() => engine.cmdRoger(a), undefined);
+      return say(`Roger, disregarding, ${name}.`, true, 'ok');
+    }
+    if (taxiQ && ast.kind === 'roger') {
+      const go = taxiQ.offer ?? (taxiQ.hard ? null : taxiQ.whole ?? taxiQ.ast);
+      if (go) { led.close(a.callsign); if (taxiQ.rule === 'cs_similar') safe(() => engine.cmdRoger(a), undefined); return dispatch(engine, go, { ...opts, memory: false }); }
+      return say(`${name}, ${taxiQ.question}?`, false, 'queried');
+    }
+    if (taxiQ && ast.kind === 'unable') {
+      led.close(a.callsign);
+      if (!taxiQ.hard) return dispatch(engine, taxiQ.whole ?? taxiQ.ast, { ...opts, memory: false });
+      return say(`Roger, ${isAirborneAst(taxiQ.rule) ? 'standing by' : a.speed > 1 ? "we'll need another route" : 'holding here, standing by for another route'}, ${name}.`, true, 'ok');
+    }
+    const whole = ast; const list: SingleAircraftCommand[] = ast.kind === 'sequence' ? ast.parts : isAircraftCommand(ast) ? [ast as SingleAircraftCommand] : [];
+    for (const part of list) {
+      if (taxiQ && !taxiQ.hard && again(taxiQ.ast, part)) { led.close(a.callsign); continue; }   // said again: as told
+      const q = safe(() => taxiMindOf(engine).check(sim, a, part) ?? airMindOf(engine).check(sim, a, part, list), null);
+      if (q && !q.hard && sim.settings?.quietCrews) continue;   // a scripted lesson: only what they cannot do
+      if (!q) { if (taxiQ && part.kind === taxiQ.ast.kind) led.close(a.callsign); continue; }
+      const offer = q.offer && ast.kind === 'sequence' ? { ...ast, parts: ast.parts.map(x => (x === part ? q.offer as SingleAircraftCommand : x)) } as CommandAST : q.offer;
+      led.ask(a.callsign, { ...q, offer }, part, whole, engine.time);
+      const still = taxiQ?.hard && again(taxiQ.ast, part) && q.question.startsWith('unable') ? 'still ' : '';
+      return say(`${name}, ${still}${q.question}?`, false, 'queried');
+    }
+  }
   // 4. UX §G3 validation
   if (opts.validate !== false) {
     const ctx = opts.ctx === undefined ? safe(() => actionCtxFromEngine(engine, a), null) : opts.ctx;
@@ -546,6 +591,14 @@ export function dispatch(engine: EngineCommandApi, ast: CommandAST, opts: Dispat
   }
   // what was accepted enters the pilot's memory
   for (const part of applied) safe(() => { if (part.kind === 'disregard') ledger.cancelLast(a.callsign); else ledger.record(a.callsign, part, engine.time, ta, mag); }, undefined);
+  // a crew with a callsign like this one's may take it for theirs: it asks (crewlife.ts)
+  if (opts.who !== 'ai' && opts.memory !== false) for (const part of applied) {
+    const c = safe(() => crewLifeOf(engine).confused(a, part), null); if (!c) continue;
+    const text = safe(() => `${engine.phraseCtx(c.b).telephony(c.b.callsign)}, ${c.question}?`, '');
+    const req = text ? safe(() => sim.raiseRequest(c.b, 'concern', a.callsign, text), null) : null;
+    if (req && req.text === text) { req.expiresAt = engine.time + 60; ledger.ask(c.b.callsign, { earlier: null, rule: 'cs_similar', question: c.question, offer: null, hard: false }, { ...part, callsign: c.b.callsign } as SingleAircraftCommand, { ...part, callsign: c.b.callsign } as CommandAST, engine.time); }
+    break;
+  }
   const code: ResultCode = refused.length ? 'partial' : conditional ? 'ok_conditional' : applyAt != null ? 'ok_queued' : 'ok';
   return finish({
     ok: true, code, transmission: tx(),
@@ -559,6 +612,7 @@ export function dispatch(engine: EngineCommandApi, ast: CommandAST, opts: Dispat
 }
 
 /** Readback lands after the pilot delay but never after the command executes. */
+const isAirborneAst = (rule: string) => rule.startsWith('air_');
 /** When each crew last asked for a slower repeat (one per 90 s: the repeat is taken in). */
 const OVERLOADED = new WeakMap<object, Map<string, number>>();
 
@@ -615,6 +669,12 @@ export interface FromEngineOptions {
 }
 
 /** Build the parser / autocomplete context from the live engine. */
+/** Crews with an open question, and what a bare number means to each. */
+function askedOf(engine: EngineCommandApi, list: readonly AircraftState[]): { asked: string[]; askedKind: Record<string, string> } {
+  const asked: string[] = [], askedKind: Record<string, string> = {}; const led = ledgerOf(engine);
+  for (const a of list) { const q = led.pending(a.callsign, engine.time); if (!q) continue; asked.push(a.callsign); const w = ({ speed: 'SPEED', altitude: 'ALTITUDE', heading: 'FLY HEADING' } as Record<string, string>)[q.ast.kind]; if (w) askedKind[a.callsign] = w; }
+  return { asked, askedKind };
+}
 export function fromEngine(engine: EngineCommandApi, opts: FromEngineOptions = {}): SuggestCtx {
   const e = src(engine);
   const list = e.aircraft ?? [];
@@ -637,6 +697,7 @@ export function fromEngine(engine: EngineCommandApi, opts: FromEngineOptions = {
   const taxiwayNodes = e.air?.taxiwayNodes;
   return {
     aircraft,
+    ...askedOf(engine, list),
     runways: runwayList(e).map(r => r.name),
     taxiways: e.air?.taxiwayNames ?? [],
     fixes: (e.beacons ?? []).map(b => b.id),
@@ -660,7 +721,7 @@ const PARSE_CODE_MAP: Partial<Record<ParseErrorCode, ResultCode>> = {
   unsupported: 'not_implemented',
 };
 
-export interface ExecuteTextResult { parse: ParseResult; result: DispatchResult }
+export interface ExecuteTextResult { parse: ParseResult; result: DispatchResult; /** What the pilot asks back when a taxi call did not parse. */ ask?: string }
 
 /**
  * Command-line / STT entry point: parse `text` (with `ctx` or a context built
@@ -671,9 +732,13 @@ export function executeText(engine: EngineCommandApi, text: string, ctx?: ParseC
   const pctx = ctx ?? fromEngine(engine, { lastCallsign: opts.lastCallsign, position: opts.position });
   const parse = parseCommand(text, pctx);
   if (!parse.ok || !parse.ast) {
+    const more = answered(engine, text, parse, pctx, opts); if (more) return more;
     const err = parse.errors[0];
     const code: ResultCode = err ? (PARSE_CODE_MAP[err.code] ?? 'invalid_param') : 'invalid_param';
-    return { parse, result: { ok: false, code, transmission: '', readback: '', reason: err?.message ?? 'Unable to parse', warnings: [] } };
+    // a taxi call the crew heard but could not make out: the pilot asks for the part that was missing
+    const a = parse.callsign ? engine.find(parse.callsign) ?? null : null;
+    const ask = a && opts.who !== 'ai' && engine.onPlayerFrequency(a) ? safe(() => TaxiMind.unclear(engine as unknown as SimEngine, a, err?.code, err?.token ?? null, text), null) : null;
+    return { parse, result: { ok: false, code, transmission: '', readback: '', reason: err?.message ?? 'Unable to parse', warnings: [] }, ...(ask && a ? { ask: `${safe(() => engine.phraseCtx(a).telephony(a.callsign), a.callsign)}, ${ask}?` } : {}) };
   }
   const { lastCallsign: _lc, withActions: _wa, ...dopts } = opts;
   void _lc; void _wa;
@@ -681,6 +746,34 @@ export function executeText(engine: EngineCommandApi, text: string, ctx?: ParseC
   return { parse, result };
 }
 
+/** "Approved, but hold short of Kilo" / "negative, make it 160": the open question answered, with the addition put in. */
+function answered(engine: EngineCommandApi, text: string, parse: ParseResult, pctx: ParseCtx, opts: DispatchOptions & FromEngineOptions): ExecuteTextResult | null {
+  const cs = parse.callsign; if (!cs) return null;
+  const said = answerWith(cs, restOf(text, pctx), pctx, parseCommand); if (!said) return null;
+  const led = ledgerOf(engine), q = led.pending(cs, engine.time), a = engine.find(cs); if (!q || !a) return null;
+  const r = parseCommand(`${cs} ${said.rest}`, pctx); if (!r.ok || !r.ast) return null;
+  const { lastCallsign: _l, withActions: _w, ...dopts } = opts; void _l; void _w;
+  if (!said.yes || q.rule === 'cs_similar') { led.close(cs); return { parse: r, result: dispatch(engine, r.ast, { ...dopts, conditions: r.detachedConditions ?? dopts.conditions }) }; }
+  const base = q.offer ?? (q.hard ? null : q.whole ?? q.ast); if (!base) return null;
+  const parts = (x: CommandAST): SingleAircraftCommand[] => (x.kind === 'sequence' ? x.parts : [x as SingleAircraftCommand]);
+  const out: SingleAircraftCommand[] = [];
+  let extra = parts(r.ast);
+  for (const p of parts(base)) {
+    if (p.kind !== 'taxi') { if (!extra.some(x => x.kind === p.kind)) out.push(p); continue; }       // a new value for the same thing replaces it
+    const hs = extra.find(x => x.kind === 'holdShort'), cr = extra.filter(x => x.kind === 'cross');
+    const t = { ...p, cross: [...p.cross, ...cr.map(x => (x as { runway: string }).runway)], ...(hs && hs.kind === 'holdShort' ? { holdShortOf: hs.of, limit: hs.of.kind === 'taxiway' ? 'hold' as const : p.limit } : {}) };
+    extra = extra.filter(x => x.kind !== 'holdShort' && x.kind !== 'cross'); out.push(t as SingleAircraftCommand);
+  }
+  out.push(...extra); led.close(cs);
+  const ast = (out.length === 1 ? out[0] : { kind: 'sequence', callsign: cs, parts: out }) as CommandAST;
+  return { parse: { ...r, ast }, result: dispatch(engine, ast, { ...dopts, memory: false }) };
+}
+/** A typed line that is two calls (only when it does not parse as one). */
+export function twoCallsIn(engine: EngineCommandApi, text: string, ctx: ParseCtx): string[] | null { void engine; return parseCommand(text, ctx).ok ? null : twoCalls(text, ctx, tokenize(text), resolveCallsign, parseCommand); }
+/** What follows the callsign, as said. */
+export function restOf(text: string, ctx: ParseCtx): string {
+  const toks = tokenize(text); const c = resolveCallsign(toks, 0, ctx); return toks.slice(c.callsign ? c.consumed : 0).map(t => t.text).filter(t => t !== ',').join(' ');
+}
 /** Describe-level helper for logs: the callsign an AST addresses (null for system commands). */
 export function targetOf(ast: CommandAST): string | null { return isAircraftCommand(ast) ? ast.callsign : null; }
 
@@ -689,3 +782,18 @@ export function targetOf(ast: CommandAST): string | null { return isAircraftComm
 // command line works end-to-end before W2-STORE switches to executeText().
 // commands.ts cannot import this module directly (it would be a cycle).
 (globalThis as { __atcDispatch?: (engine: EngineCommandApi, ast: CommandAST) => CommandResult }).__atcDispatch = (engine, ast) => dispatch(engine, ast);
+
+/** A command line as the controller says it on the radio ("DLH455 pushback approved" -> "Lufthansa four fifty-five,
+ *  pushback approved."), without sending it: the tutorial shows it under the call so a newcomer can read it out. */
+export function spokenLine(engine: EngineCommandApi, text: string): string | null {
+  try {
+    const parse = parseCommand(text, fromEngine(engine));
+    if (!parse.ok || !parse.ast) return null;
+    const a = isAircraftCommand(parse.ast) ? (engine.find(parse.ast.callsign) ?? null) : null;
+    const pc = engine.phraseCtx(a); let line = phraseTransmission(parse.ast, pc);
+    // the callsign digit by digit in plain words ("four five five"): easiest to read out, and to recognise
+    const m = a?.callsign.toUpperCase().match(/^([A-Z]{3})(\d+)([A-Z]*)$/);
+    if (a && m) { const D = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine']; line = line.replace(telephonyOf(a.callsign, pc.variant), telephonyOf(a.callsign, 'FAA').replace(groupNumber(m[2]), m[2].split('').map(d => D[+d]).join(' '))); }
+    return line || null;
+  } catch { return null; }
+}

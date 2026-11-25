@@ -43,7 +43,7 @@ export type ApproachType = 'ILS' | 'LOC' | 'VISUAL' | 'RNAV';
 export type UnableReason = 'traffic' | 'wake' | 'runway_closed' | 'slot' | 'standby' | 'delay' | 'weather';
 export type ReportKind =
   | 'position' | 'heading' | 'altitude' | 'airspeed' | 'pob' | 'fuel' | 'nature' | 'dg' | 'intentions'
-  | 'established' | 'vacated' | 'ready' | 'reason' | 'readyou5' | 'four_mile_final' | 'rolling';
+  | 'established' | 'vacated' | 'ready' | 'reason' | 'readyou5' | 'four_mile_final' | 'rolling' | 'ride';
 export type EmergencyInfoKind = 'pob' | 'fuel' | 'nature' | 'dg' | 'intentions';
 export type CorrectionField = 'heading' | 'altitude' | 'speed' | 'runway' | 'squawk' | 'frequency' | 'taxiway';
 export type ExpediteScope = 'taxi' | 'crossing' | 'vacating' | 'climb' | 'descent';
@@ -65,8 +65,11 @@ export interface PushbackAst extends Addressed { kind: 'pushback'; dir: PushDir;
  * `via: []` + `auto: true` = shortest route (findPath). `holdShortOf` = explicit
  * hold; `cross` = runways the clearance includes crossing (FAA, max 1). Every
  * other runway on the route gets an implicit hold-short (engine safety net).
+ *
+ * `limit` = a step-by-step clearance: the aircraft goes only that far (to `holdShortOf`, or just across the last runway in
+ * `cross`), stops and calls for the next step. `dest` is then only where it is heading in the end (its plan), not said.
  */
-export interface TaxiAst extends Addressed { kind: 'taxi'; dest: TaxiDest; via: string[]; auto: boolean; holdShortOf: HoldShortTarget | null; cross: string[]; expedite: boolean }
+export interface TaxiAst extends Addressed { kind: 'taxi'; dest: TaxiDest; via: string[]; auto: boolean; holdShortOf: HoldShortTarget | null; cross: string[]; expedite: boolean; limit?: 'hold' | 'crossed' | null }
 export interface HoldShortAst extends Addressed { kind: 'holdShort'; of: HoldShortTarget }
 export interface HoldPositionAst extends Addressed { kind: 'holdPosition'; reason: string | null }
 /** Resume taxi/pushback after a hold; optional new hold-short. Never releases a runway hold. */
@@ -133,7 +136,8 @@ export interface DisregardAst extends Addressed { kind: 'disregard' }
 export interface StandbyAst extends Addressed { kind: 'standby' }
 export interface UnableAst extends Addressed { kind: 'unable'; reason: UnableReason }
 export interface ReportAst extends Addressed { kind: 'report'; items: ReportKind[] }
-export interface RogerAst extends Addressed { kind: 'roger' }
+/** `yes`: "approved", "affirm", "that works" - the answer to something the pilot asked or offered (dispatch.ts step 3b). */
+export interface RogerAst extends Addressed { kind: 'roger'; yes?: boolean }
 
 // ── emergency (aircraft-addressed) ────────────────────────────────────────────
 /** "Roger mayday, [squawk 7700,] say souls on board and fuel remaining, state intentions." */
@@ -401,7 +405,7 @@ function holdTargetText(t: HoldShortTarget | null): string {
   if (!t) return '';
   return t.kind === 'runway' ? `hold short ${t.runway}` : t.kind === 'taxiway' ? `hold short twy ${t.taxiway}` : `hold at ${t.label}`;
 }
-function exitText(e: ExitSpec): string { return e.kind === 'taxiway' ? `exit ${e.taxiway}` : `next exit ${e.dir === 'L' ? 'left' : 'right'}`; }
+function exitText(e: ExitSpec): string { return e.kind === 'taxiway' ? `exit ${/^[LR]$/.test(e.taxiway) ? 'at ' : ''}${e.taxiway}` : `next exit ${e.dir === 'L' ? 'left' : 'right'}`; }
 function condText(c: PendingCondition | null): string {
   if (!c) return '';
   switch (c.type) {
@@ -434,6 +438,7 @@ export function describe(ast: CommandAST): string {
       const via = ast.via.length ? ` via ${ast.via.join(', ')}` : ast.auto ? '' : '';
       const x = ast.cross.length ? `, cross ${ast.cross.join(', ')}` : '';
       const hs = ast.holdShortOf ? `, ${holdTargetText(ast.holdShortOf)}` : '';
+      if (ast.limit) return `Taxi${via}${x ? `${via ? ',' : ''} cross ${ast.cross.join(', ')}` : ''}${hs}${ast.expedite ? ', expedite' : ''}`.replace('Taxi,', 'Taxi');
       return `Taxi ${d}${via}${x}${hs}${ast.expedite ? ', expedite' : ''}`;
     }
     case 'holdShort': return holdTargetText(ast.of).replace(/^h/, 'H');
@@ -485,7 +490,7 @@ export function describe(ast: CommandAST): string {
     case 'standby': return 'Standby';
     case 'unable': return `Unable (${ast.reason.replace('_', ' ')})`;
     case 'report': return `Report ${ast.items.join(', ') || 'position'}`;
-    case 'roger': return 'Roger';
+    case 'roger': return ast.yes ? 'Approved' : 'Roger';
     case 'emergencyAck': return `Roger mayday${ast.squawk ? ', squawk 7700' : ''}, say ${ast.ask.join('/')}`;
     case 'priority': return `Priority ${ast.runway}${ast.numberOne ? ', number one' : ''}${ast.straightIn ? ', straight-in' : ''}${ast.clearIls ? `, cleared ILS ${ast.runway}` : ''}${ast.sterile ? ', runway sterile' : ''}`;
     case 'stopOnRunway': return ast.mode === 'stop' ? 'Stop on the runway' : `Vacate if able${ast.via ? ` via ${ast.via}` : ''}`;

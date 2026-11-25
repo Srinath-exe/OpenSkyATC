@@ -931,6 +931,9 @@ test.describe('emergencies: actions and services', () => {
     await game.openPanelFor('GND1');
     await expect(game.emergBand()).toHaveAttribute('data-type', 'brake_fire');
     await expect(game.emergBand()).toHaveAttribute('data-level', 'PAN');
+    // the crew asked to hold for cooling: told to (a moving aircraft is chased all the way to the runway)
+    await game.sendOk('GND1 hold position');
+    await sim.advance(8);
 
     await game.action('emerg-dispatch');
     expect(await game.stepType()).toBe('vehicle');
@@ -1080,6 +1083,11 @@ test.describe('emergencies: actions and services', () => {
     await sim.advance(1);                                               // the card re-renders on the next sim second (65-alerts fixme: in-place mutation vs useSim)
     await expect(veh.cardStatus('AMB1')).toHaveAttribute('data-state', 'returning');
     await game.waitRadio(/Medic 1, return to base/, { who: 'ATC' });
+    // the way home crosses 27L: back from the scene it is no longer responding, so it holds short and waits for the
+    // controller's crossing clearance like any vehicle
+    await sim.advanceUntilOk("s => window.__atcTest.vehicles().some(v => v.id === 'AMB1' && !!v.holdShortRunway)", 300);
+    const hs = (await sim.vehicle('AMB1'))!.holdShortRunway;
+    expect((await sim.command(`MEDIC 1 CROSS RUNWAY ${hs}`)).ok).toBe(true);
     await sim.advanceUntilOk("s => window.__atcTest.vehicles().some(v => v.id === 'AMB1' && v.state === 'standby')", 600);
     await expect(veh.cardStatus('AMB1')).toHaveAttribute('data-state', 'standby');
     await expect(veh.root()).toHaveAttribute('data-responding', '0');

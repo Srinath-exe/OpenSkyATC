@@ -1,0 +1,68 @@
+/* Flight board (left) and flight card (right). Glass panels over the map. */
+.mono { font-family: var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; }
+.h { display: flex; align-items: center; gap: 8px; margin: 0; padding: 0 6px 6px; font: 600 10.5px / 1 var(--font); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); }
+.h em { font-style: normal; letter-spacing: 0; color: var(--text-2); background: rgba(255,255,255,0.07); border-radius: 999px; padding: 3px 7px; }
+.empty { margin: 0; padding: 6px; color: var(--text-4); font-size: 12px; }
+.board [data-tone='ok'], .card [data-tone='ok'] { color: var(--green); } .board [data-tone='late'], .card [data-tone='late'] { color: #ff7a6b; } .board [data-tone='early'], .card [data-tone='early'] { color: #7cb8ff; }
+.thumb { display: block; position: relative; overflow: hidden; }
+.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.thumbPh { position: absolute; inset: 32% 8%; border-radius: 40px; background: linear-gradient(90deg, rgba(255,255,255,0.05), rgba(255,255,255,0.11), rgba(255,255,255,0.05)); }
+
+.board { display: flex; flex-direction: column; gap: 10px; min-height: 0; height: 100%; }
+.group { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; padding: 12px 8px 8px; border-radius: 16px; background: var(--glass-fill); backdrop-filter: blur(var(--glass-blur)) saturate(1.3); border: 1px solid var(--glass-border); }
+.rows { display: flex; flex-direction: column; gap: 2px; overflow: auto; min-height: 0; scrollbar-width: thin; }
+.row { display: grid; grid-template-columns: 62px 1fr auto; align-items: center; gap: 10px; width: 100%; padding: 7px 6px; border: 0; border-radius: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background 0.16s ease, box-shadow 0.16s ease; }
+.row:hover { background: rgba(255,255,255,0.05); }
+.row[data-sel] { background: rgba(245,147,63,0.13); box-shadow: inset 2px 0 0 var(--orange); }
+.rowImg { width: 62px; height: 28px; }
+.rowMid { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rowMid b { font: 700 13px / 1 var(--font); }
+.rowMid span { color: var(--text-2); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row[data-req] .rowMid span { color: var(--orange); font-weight: 600; }
+.rowEnd { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.rowEnd b { font-size: 13px; } .rowEnd span { font: 600 10.5px / 1 var(--font); white-space: nowrap; }
+
+.card { display: flex; flex-direction: column; gap: 12px; height: 100%; min-height: 0; padding: 16px; border-radius: 18px; background: var(--glass-fill-strong); backdrop-filter: blur(var(--glass-blur)) saturate(1.3); border: 1px solid var(--glass-border); animation: cardIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes cardIn { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.head h3 { margin: 0; font: 700 20px / 1.1 var(--font); } .head p { margin: 4px 0 0; color: var(--text-2); font-size: 12.5px; }
+.stage { padding: 5px 9px; border-radius: 999px; font: 700 10.5px / 1 var(--font); letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; background: rgba(87,205,80,0.14); color: var(--green); }
+.stage[data-tone='idle'] { background: rgba(255,255,255,0.08); color: var(--text-2); } .stage[data-tone='warn'] { background: rgba(255,194,74,0.15); color: #ffc24a; } .stage[data-tone='air'] { background: rgba(124,184,255,0.15); color: #7cb8ff; }
+.hero { height: 92px; margin: 0 -4px; flex: none; }
+.route { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+.route div { display: flex; flex-direction: column; gap: 3px; min-width: 0; } .route div[data-r] { align-items: flex-end; text-align: right; }
+.route b { font: 700 22px / 1 var(--font); letter-spacing: 0.02em; } .route span { color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.line { position: relative; height: 1px; background: linear-gradient(90deg, var(--line-strong), var(--orange), var(--line-strong)); }
+.line span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -54%); font-style: normal; color: var(--orange); font-size: 13px; background: #15171b; padding: 0 6px; }
+.times, .facts { display: grid; gap: 8px; } .times { grid-template-columns: repeat(3, 1fr); } .facts { grid-template-columns: repeat(4, 1fr); }
+.times div, .facts div { display: flex; flex-direction: column; gap: 5px; padding: 9px 10px; border-radius: 10px; background: rgba(255,255,255,0.04); min-width: 0; }
+.times small, .facts small { color: var(--text-3); font-size: 10.5px; white-space: nowrap; } .times b { font-size: 15px; } .facts b { font-size: 13px; white-space: nowrap; }
+.log { flex: 1; min-height: 60px; overflow: auto; display: flex; flex-direction: column; gap: 9px; margin-top: -4px; scrollbar-width: thin; }
+.log p { margin: 0; display: grid; grid-template-columns: 38px 1fr; gap: 8px; font-size: 12.5px; line-height: 1.4; color: var(--text-2); }
+.log p small { color: var(--text-4); padding-top: 2px; }
+.log p b { display: block; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); margin-bottom: 2px; }
+.log p[data-atc] span { color: var(--text-1); } .log p[data-atc] b { color: var(--orange); }
+.log .empty { display: block; padding: 4px 0; }
+
+.toLand { color: var(--text-3); }
+.rowEnd[data-soon] b { color: #ffc24a; }
+.facts[data-n='2'] { grid-template-columns: repeat(2, 1fr); } .facts[data-n='3'] { grid-template-columns: repeat(3, 1fr); } .facts b { font-size: 15px; }
+.off { margin: -4px 0 0; font: 700 12px / 1 var(--font); color: #7cb8ff; } .off[data-tone='late'] { color: #ff6a5c; }
+.final { display: grid; grid-template-columns: 0.8fr 1fr 1.2fr; gap: 8px; }
+.final div { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border-radius: 10px; background: rgba(124,184,255,0.10); border: 1px solid rgba(124,184,255,0.25); }
+.final small { color: var(--text-3); font-size: 10.5px; } .final b { font-size: 17px; color: #cfe3ff; }
+.final[data-soon] div { background: rgba(255,194,74,0.10); border-color: rgba(255,194,74,0.35); } .final[data-soon] b { color: #ffd27a; }
+
+/* next call (the AI's suggestion, to learn the calls in the flow) */
+.next { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 12px; background: rgba(61,220,132,0.07); border: 1px solid rgba(61,220,132,0.28); }
+.next { box-shadow: 0 0 0 1px rgba(61,220,132,0.12), 0 10px 30px -14px rgba(61,220,132,0.45); }
+.next[data-wait] { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.14); box-shadow: none; }
+.next[data-ai] { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.14); box-shadow: none; } .next[data-ai] .nextH { color: var(--text-3); } .next[data-ai] .nextSay { color: var(--text-2); }
+.nextH { display: flex; align-items: center; justify-content: space-between; margin: 0; font: 600 10.5px / 1 var(--font); letter-spacing: 0.12em; text-transform: uppercase; color: var(--green); }
+.next[data-wait] .nextH { color: var(--text-3); }
+.nextH em { font-style: normal; letter-spacing: 0.02em; text-transform: none; font-weight: 500; color: var(--text-3); }
+.nextSay { margin: 0; font-size: 16px; line-height: 1.38; font-weight: 600; color: var(--text-1); }
+.nextCmd { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.10); background: rgba(0,0,0,0.25); color: var(--text-2); font-size: 12px; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
+.nextCmd:hover { border-color: rgba(61,220,132,0.5); background: rgba(61,220,132,0.08); color: var(--text-1); }
+.nextCmd i { font-style: normal; font-size: 10.5px; color: var(--text-4); white-space: nowrap; }
+.nextWhy, .nextWait { margin: 0; font-size: 12px; line-height: 1.4; color: var(--text-3); }

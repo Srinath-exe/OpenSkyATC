@@ -1,0 +1,121 @@
+{
+ "scores": {
+  "live|steps": {
+   "cmd": 84,
+   "right": 31,
+   "wrong": 8,
+   "model_right": 22,
+   "neg": 12,
+   "neg_sent": 0
+  },
+  "live|skywest": {
+   "cmd": 55,
+   "right": 42,
+   "wrong": 0,
+   "model_right": 40,
+   "neg": 0,
+   "neg_sent": 0
+  },
+  "live|indep": {
+   "cmd": 60,
+   "right": 51,
+   "wrong": 3,
+   "model_right": 55,
+   "neg": 12,
+   "neg_sent": 0
+  },
+  "live|stress": {
+   "cmd": 86,
+   "right": 81,
+   "wrong": 0,
+   "model_right": 76,
+   "neg": 34,
+   "neg_sent": 1
+  },
+  "live|held": {
+   "cmd": 62,
+   "right": 52,
+   "wrong": 1,
+   "model_right": 57,
+   "neg": 5,
+   "neg_sent": 0
+  },
+  "live|rows": {
+   "cmd": 190,
+   "right": 181,
+   "wrong": 4,
+   "model_right": 181,
+   "neg": 13,
+   "neg_sent": 0
+  },
+  "live|talk": {
+   "cmd": 31,
+   "right": 7,
+   "wrong": 3,
+   "model_right": 2,
+   "neg": 26,
+   "neg_sent": 5
+  },
+  "v4|steps": {
+   "cmd": 84,
+   "right": 32,
+   "wrong": 5,
+   "model_right": 51,
+   "neg": 12,
+   "neg_sent": 0
+  },
+  "v4|skywest": {
+   "cmd": 55,
+   "right": 52,
+   "wrong": 0,
+   "model_right": 54,
+   "neg": 0,
+   "neg_sent": 0
+  },
+  "v4|indep": {
+   "cmd": 60,
+   "right": 47,
+   "wrong": 3,
+   "model_right": 51,
+   "neg": 12,
+   "neg_sent": 1
+  },
+  "v4|stress": {
+   "cmd": 86,
+   "right": 81,
+   "wrong": 0,
+   "model_right": 73,
+   "neg": 34,
+   "neg_sent": 1
+  },
+  "v4|held": {
+   "cmd": 62,
+   "right": 49,
+   "wrong": 1,
+   "model_right": 56,
+   "neg": 5,
+   "neg_sent": 0
+  },
+  "v4|rows": {
+   "cmd": 190,
+   "right": 182,
+   "wrong": 4,
+   "model_right": 170,
+   "neg": 13,
+   "neg_sent": 0
+  },
+  "v4|talk": {
+   "cmd": 31,
+   "right": 15,
+   "wrong": 2,
+   "model_right": 15,
+   "neg": 26,
+   "neg_sent": 5
+  }
+ },
+ "total": [
+  445,
+  458
+ ],
+ "ship": false
+}

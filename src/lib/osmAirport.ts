@@ -28,7 +28,9 @@
 //    nearestOsmNode(air, lng, lat, maxM?)          -> grid-indexed nearest node
 //    standByRef / vehicleStationsLL               -> stand lookup, VehicleFleet station map (lat/lng)
 // ============================================================
+import { EXTRA_FEATURES } from './osmExtras';
 import type { PathHold } from './sim/types';
+import { laneFixFor } from './sim/standPlans';
 
 export interface LngLat { lng: number; lat: number; }
 
@@ -41,6 +43,8 @@ export interface OsmEdge {
   taxiway?: string;
   /** Physical runway ref ('09R/27L') for runway edges that belong to a merged runway. */
   runway?: string;
+  /** A taxi line on a runway's strip at a shallow angle (a rapid exit): not a way across it, a route avoids it. */
+  strip?: boolean;
   /** Stand lead-in edge (apron; type 'taxiway' so legacy routing treats it as a taxi lane). */
   leadIn?: boolean;
 }
@@ -145,6 +149,8 @@ export interface OsmStand {
   sizeSource: 'ref' | 'spacing' | 'leadin' | 'default';
   /** True when OSM drew the lead-in line (headingIn is measured, not inferred). */
   hasLeadIn: boolean;
+  /** Has a ref of its own on the map (an unnamed line is often a lead-out or alternate marking). */
+  named?: boolean;
   /** Nose-in stands need a tug (03 §1.3 / UX §G5.3); small remote/GA spots are taxi-out. */
   needsPushback: boolean;
   /** Stand closure (NOTAM) — always false from OSM; the engine may flip it. */
@@ -356,12 +362,29 @@ interface RwBuild {
   verts: Map<string, { t: number; lng: number; lat: number }>;
 }
 
+/** Runways in the map data that belong to somebody else (Changi Air Base's eastern one). */
+const NOT_CIVIL: Record<string, string[]> = { WSSS: ['03/21'] };
+/** ... and their taxiways (the air base's, east of Changi's 02R). */
+const KEEP_POINTS: Record<string, [number, number][]> = { KJFK: [[-73.786302, 40.636774], [-73.785253, 40.636298]] };
+const LANES_PRUNED = new Set(['LFPG', 'KJFK']);
+const STRAIGHT_ACROSS: Record<string, [string, string, string, string][]> = {
+  WSSS: [['103.998317,1.362162', '103.998966,1.361950', '103.999567,1.361638', 'T2'],   // T2 over 02C/20C
+    ['103.992256,1.381751', '103.991385,1.381981', '103.991146,1.382086', 'W1'], ['103.977943,1.348915', '103.977514,1.349092', '103.976825,1.349376', ''],   // over 02L/20R
+    ['103.984623,1.329069', '*', '103.985479,1.328731', 'T12'], ['103.985003,1.330196', '*', '103.985920,1.329823', 'T11'], ['103.997531,1.361194', '*', '103.998937,1.360632', 'E2']],   // over 02C/20C
+  KJFK: [['-73.790314,40.657401', '*', '-73.789838,40.658018', 'U1']],   // over 13L/31R
+  RJTT: [['139.776987,35.547777', '139.777540,35.548045', '139.778012,35.548271', 'L9'], ['139.762515,35.549675', '139.762066,35.549936', '139.761671,35.550150', 'B2'],
+    ['139.777486,35.567074', '139.777063,35.567404', '139.776475,35.567657', 'B14'], ['139.761792,35.548878', '*', '139.760947,35.549362', 'B1']],
+};
+/** Stubs no airliner can turn off at their far end (JFK: L between B and A, 116 degrees back up A): the way round by the next taxiway is taken. */
+const CUT_EDGES: Record<string, [string, string][]> = { KJFK: [['-73.785010,40.636188', '-73.786038,40.635743']] };
+const NOT_CIVIL_TWY: Record<string, RegExp> = { WSSS: /^(Y|MY)\d*$/ };
+
 export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {}): OsmAirport {
   const nodes = new Map<string, OsmNode>();
   const warnings: string[] = [];
   const warn = (s: string) => { warnings.push(s); };
   const featuresRaw = (fc as { features?: unknown })?.features;
-  const features: Feature[] = Array.isArray(featuresRaw) ? (featuresRaw as Feature[]) : [];
+  const features: Feature[] = [...(Array.isArray(featuresRaw) ? (featuresRaw as Feature[]) : []), ...((EXTRA_FEATURES[icao] ?? []) as Feature[])];
   const centerRaw = (fc as { center?: unknown })?.center;
   const center: LngLat = Array.isArray(centerRaw) && centerRaw.length >= 2
     ? { lng: Number(centerRaw[0]), lat: Number(centerRaw[1]) }
@@ -385,9 +408,11 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
     return n;
   };
 
+  let graphV = 0;   // counts changes to the graph while it is built
   const taxiwayNodes = new Map<string, Set<string>>();
   const link = (a: OsmNode, b: OsmNode, type: OsmEdgeType, attrs: { taxiway?: string; runway?: string; leadIn?: boolean } = {}) => {
     if (a.id === b.id) return;
+    graphV++;
     const m = meters(a.lng, a.lat, b.lng, b.lat);
     const mk = (to: string): OsmEdge => {
       const e: OsmEdge = { to, type, meters: m };
@@ -404,6 +429,7 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
     }
   };
   const unlink = (a: OsmNode, b: OsmNode) => {
+    graphV++;
     a.edges = a.edges.filter(e => e.to !== b.id);
     b.edges = b.edges.filter(e => e.to !== a.id);
   };
@@ -436,7 +462,7 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
   }
 
   // ── 2. runways: merge split/duplicate ways per ref, orient by geometry ──
-  const rwSegs = features.filter(f => aerowayOf(f) === 'runway' && geomType(f) === 'LineString' && coordsOf(f).length >= 2);
+  const rwSegs = features.filter(f => aerowayOf(f) === 'runway' && geomType(f) === 'LineString' && coordsOf(f).length >= 2 && !(NOT_CIVIL[icao] ?? []).includes(String(prop(f, 'ref') ?? '')));
   const rwNameRe = /^\d{1,2}[LRC]?$/;
   const isRwRef = (r: string | null): r is string => {
     if (!r || !r.includes('/')) return false;
@@ -582,14 +608,17 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
   // ── spatial helpers ──
   const isRunwayNode = (id: string) => runwayNodeRefs.has(id);
   interface EdgeRec { a: OsmNode; b: OsmNode; ax: XY; bx: XY; e: OsmEdge; }
+  let edgeCache: { v: number; out: EdgeRec[] } | null = null;
   const collectTaxiEdges = (): EdgeRec[] => {
+    if (edgeCache && edgeCache.v === graphV) return edgeCache.out.slice();
     const out: EdgeRec[] = [];
     for (const a of nodes.values()) for (const e of a.edges) {
       if (e.type !== 'taxiway' || e.leadIn || a.id >= e.to) continue;
       const b = nodes.get(e.to); if (!b) continue;
       out.push({ a, b, ax: xyOf(a), bx: xyOf(b), e });
     }
-    return out;
+    edgeCache = { v: graphV, out };
+    return out.slice();
   };
   class EdgeIndex {
     private cells = new Map<string, EdgeRec[]>();
@@ -873,13 +902,50 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
         const pts = cs.map(c => frame.xy(c[0], c[1]));
         const dFirst = idx.nearest(pts[0], 200)?.proj.d ?? Infinity;
         const dLast = idx.nearest(pts[pts.length - 1], 200)?.proj.d ?? Infinity;
-        const ordered = dFirst <= dLast ? cs : cs.slice().reverse();
+        // the end on the taxi lane is the way in. Where no lane is mapped at either end (JFK's alleys), the end at the
+        // terminal is the stop: "nearest lane" parked them nose out in the alley, tail to the building
+        let wayIn = dFirst <= dLast;
+        if (laneFixFor.has(icao) && icao !== 'KSFO' && Math.min(dFirst, dLast) > 6) {
+          const wall = (p: XY) => { let d = Infinity; for (const t of terminalPolys) d = Math.min(d, pointInPoly(p, t.pts) ? 0 : distToPolyEdge(p, t.pts)); return d; };
+          const a = wall(pts[0]), b = wall(pts[pts.length - 1]); if (Math.min(a, b) < 60 && Math.abs(a - b) > 22) wayIn = b < a;
+        }
+        const ordered = wayIn ? cs : cs.slice().reverse();
         const stop = ordered[ordered.length - 1], entry = ordered[0];
         if (meters(stop[0], stop[1], entry[0], entry[1]) < 3) continue;
         cands.push({ ref: refOf(f), osmId: idOf(f), stop: frame.xy(stop[0], stop[1]), stopLL: { lng: stop[0], lat: stop[1] }, entryLL: { lng: entry[0], lat: entry[1] }, pts: ordered.map(c => ({ lng: c[0], lat: c[1] })), isGate: false });
       } else if (gt === 'Point') {
         const [lng, lat] = f.geometry!.coordinates as [number, number];
         cands.push({ ref: refOf(f), osmId: idOf(f), stop: frame.xy(lng, lat), stopLL: { lng, lat }, entryLL: null, pts: [], isGate: false });
+      }
+    }
+    // One stand's marking is often mapped in pieces: curves off the lane from either side, then the straight run up to the
+    // stop (Haneda 54-65). Only the piece that ends at the stop is the stand; the curves' ends, where they
+    // join it, are not places to park (aircraft stopped there, 60 m short of the terminal and askew, out of a bridge's reach).
+    if (icao === 'RJTT') {
+      const byRef = new Map<string, Cand[]>();
+      for (const c of cands) if (c.ref && c.pts.length >= 2) { const k = String(c.ref).trim(), l = byRef.get(k); if (l) l.push(c); else byRef.set(k, [c]); }
+      for (const l of byRef.values()) {
+        if (l.length < 2) continue;
+        const tip = (c: Cand, i: 0 | 1): XY => { const q = c.pts[i ? c.pts.length - 1 : 0]; return frame.xy(q.lng, q.lat); };
+        const on = (o: Cand, p: XY) => o.pts.some(q => { const v = frame.xy(q.lng, q.lat); return Math.hypot(v.x - p.x, v.y - p.y) < 2; });
+        const left = new Set(l);
+        while (left.size) {
+          // pieces joined end to end (or an end on another piece's line)
+          const grp: Cand[] = [left.values().next().value as Cand]; left.delete(grp[0]);
+          for (let i = 0; i < grp.length; i++) for (const o of [...left]) {
+            if ([0, 1].some(a => on(o, tip(grp[i], a as 0 | 1)) || on(grp[i], tip(o, a as 0 | 1)))) { grp.push(o); left.delete(o); }
+          }
+          if (grp.length < 2) continue;
+          let best: { c: Cand; i: 0 | 1; d: number } | null = null;
+          for (const c of grp) for (const i of [0, 1] as const) {
+            const p = tip(c, i); if (grp.some(o => o !== c && on(o, p))) continue;   // a joint
+            const d = idx.nearest(p, 250)?.proj.d ?? 250; if (!best || d > best.d) best = { c, i, d };
+          }
+          if (!best || best.d < 15) continue;
+          const c = best.c; if (best.i === 0) c.pts.reverse();
+          c.stopLL = c.pts[c.pts.length - 1]; c.entryLL = c.pts[0]; c.stop = frame.xy(c.stopLL.lng, c.stopLL.lat);
+          for (const o of grp) if (o !== c) cands.splice(cands.indexOf(o), 1);
+        }
       }
     }
     // gates: merge into a stand within 30 m, else become stands themselves
@@ -935,6 +1001,56 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
       const stop = { x: c.stop.x - (c.stop.x - prev.x) / seg * back, y: c.stop.y - (c.stop.y - prev.y) / seg * back };
       c.stop = stop; c.stopLL = frame.ll(stop); c.pts[c.pts.length - 1] = c.stopLL;
     }
+    // ── dead-end taxilanes ── the mapped lane often stops short of the last stands of an alley (SFO 6A, 7B, 8, 9, 5B).
+    // Their axes then ran on past its end to whatever lane lay beyond (255 m at E2), or their lead-in looped back to it.
+    // A dead end is run on straight, as far as the stands that would join it, clear of the buildings and other lanes.
+    const axisOf = (c: Cand): XY | null => {
+      let k = c.pts.length - 2; if (k < 0) return null; let back = frame.xy(c.pts[k].lng, c.pts[k].lat);
+      while (k > 0 && Math.hypot(back.x - c.stop.x, back.y - c.stop.y) < 8) { k--; back = frame.xy(c.pts[k].lng, c.pts[k].lat); }
+      const L = Math.hypot(back.x - c.stop.x, back.y - c.stop.y); return L < 3 ? null : { x: (back.x - c.stop.x) / L, y: (back.y - c.stop.y) / L };
+    };
+    const wallClear = (p: XY) => { let d = Infinity; for (const t of terminalPolys) { if (pointInPoly(p, t.pts)) return 0; d = Math.min(d, distToPolyEdge(p, t.pts)); } return d; };
+    /** First taxi lane along a ray, metres (Infinity when none within `max`). */
+    const firstLane = (o: XY, u: XY, min: number, max: number, skip?: (r: EdgeRec) => boolean): number => {
+      let best = Infinity;
+      for (const rec of taxiEdges) {
+        if (skip?.(rec)) continue;
+        const ex = rec.bx.x - rec.ax.x, ey = rec.bx.y - rec.ax.y, el = Math.hypot(ex, ey); if (el < 0.5) continue;
+        const den = u.x * ey - u.y * ex; if (Math.abs(den) / el < 0.34) continue;
+        const wx = rec.ax.x - o.x, wy = rec.ax.y - o.y, s = (wx * ey - wy * ex) / den, t = (wx * u.y - wy * u.x) / den;
+        if (s >= min && s <= max && t >= 0 && t <= 1 && s < best) best = s;
+      }
+      return best;
+    };
+    const laneEnds: OsmNode[] = [];
+    let taxiEdges = collectTaxiEdges().filter(r => !isRunwayNode(r.a.id) && !isRunwayNode(r.b.id));
+    const refd = uniq.filter(c => c.ref);       // named stands only: an unnamed line is as likely a lead-out marking
+    if (laneFixFor.has(icao)) for (const end of [...nodes.values()].filter(n => n.edges.length === 1 && n.edges[0].type === 'taxiway' && !n.edges[0].leadIn && !isRunwayNode(n.id))) {
+      const E0 = end.edges[0], p = xyOf(end);
+      // its direction over the last 25 m
+      let prev = end, cur = nodes.get(E0.to)!, acc = E0.meters; while (acc < 25 && cur.edges.length === 2) { const nx = cur.edges.find(e => e.to !== prev.id); if (!nx) break; prev = cur; cur = nodes.get(nx.to)!; acc += nx.meters; }
+      const q = xyOf(cur), L = Math.hypot(p.x - q.x, p.y - q.y); if (L < 10) continue;
+      const d = { x: (p.x - q.x) / L, y: (p.y - q.y) / L };
+      // how far it may run: 20 m off every building, up to the next lane
+      let room = 0; while (room < 160 && wallClear({ x: p.x + d.x * (room + 8), y: p.y + d.y * (room + 8) }) >= 20) room += 8;
+      room = Math.min(room, firstLane(p, d, 4, 200) - 4); if (room < 12) continue;
+      let need = 0;
+      for (const c of refd) {
+        const u = axisOf(c); if (!u) continue;
+        const den = u.x * d.y - u.y * d.x; if (Math.abs(den) < 0.34) continue;
+        const wx = p.x - c.stop.x, wy = p.y - c.stop.y, sA = (wx * d.y - wy * d.x) / den, t = (wx * u.y - wy * u.x) / den;
+        if (sA < 60 || sA > 140 || t < -8 || t > room) continue;                 // 60 m: well behind a parked narrowbody
+        if (firstLane(c.stop, u, 12, 320) < sA + 15) continue;                    // it has a lane of its own, nearer
+        const X = { x: c.stop.x + u.x * sA, y: c.stop.y + u.y * sA }, from = { x: c.stop.x + u.x * 2, y: c.stop.y + u.y * 2 };
+        if (terminalPolys.some(tp => tp.pts.some((v, i) => segIntersect(from, X, v, tp.pts[(i + 1) % tp.pts.length])))) continue;
+        need = Math.max(need, t, 4);
+      }
+      if (need < 4) { if (refd.some(c => Math.hypot(c.stop.x - p.x, c.stop.y - p.y) < 130)) laneEnds.push(end); continue; }
+      const tip = frame.ll({ x: p.x + d.x * (need + 2), y: p.y + d.y * (need + 2) }), tipNode = node(tip.lng, tip.lat);
+      link(end, tipNode, 'taxiway', { taxiway: E0.taxiway }); laneEnds.push(tipNode);
+      warnings.push(`lane ${E0.taxiway ?? '(unnamed)'} run on ${Math.round(need)} m past its mapped end`);
+      taxiEdges = collectTaxiEdges().filter(r => !isRunwayNode(r.a.id) && !isRunwayNode(r.b.id));
+    }
     /** The lane node a stand's axis, run straight back from the stop, meets first (the lane is split there), or null
      *  when nothing sensible lies behind the stand: no lane within 320 m, a near-parallel one, or a terminal in the way. */
     const canonicalEntry = (c: Cand): OsmNode | null => {
@@ -952,6 +1068,13 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
         const sAlong = (wx * ey - wy * ex) / den, t = (wx * uy - wy * ux) / den;
         if (sAlong < 12 || sAlong > 320 || t < 0 || t > 1) continue;
         if (!best || sAlong < best.s) best = { s: sAlong, t, rec, x: { x: c.stop.x + ux * sAlong, y: c.stop.y + uy * sAlong } };
+      }
+      // a stand in line with the end of a lane (at the head of an alley): straight to the lane's end, not past it and on
+      for (const n of laneEnds) {
+        const q = xyOf(n), dx = q.x - c.stop.x, dy = q.y - c.stop.y, dd = Math.hypot(dx, dy);
+        if (dd < 42 || dd > 130 || (best && best.s < dd + 15) || (dx * ux + dy * uy) / dd < 0.978) continue;   // within 12 degrees
+        if (terminalPolys.some(tp => tp.pts.some((v, i) => segIntersect({ x: c.stop.x + ux * 2, y: c.stop.y + uy * 2 }, q, v, tp.pts[(i + 1) % tp.pts.length])))) continue;
+        return n;
       }
       if (!best) return null;
       // not through a building (2 m clear of the stop itself, which may sit against the outline)
@@ -1028,7 +1151,7 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
         leadIn: leadPts.length >= 2 ? { from: { lng: entryNode.lng, lat: entryNode.lat }, to: { lng: standNode.lng, lat: standNode.lat } } : null,
         leadInPts: leadPts.length >= 2 ? leadPts : [{ lng: standNode.lng, lat: standNode.lat }, { lng: standNode.lng, lat: standNode.lat }],
         headingIn, heading: headingIn, pushbackHeading: (headingIn + 180) % 360, type, size: 'C', terminal: tdist <= 300 ? terminal : undefined,
-        osmId: c.osmId, sizeSource: 'default', hasLeadIn: !!c.entryLL, needsPushback: true, closed: false,
+        osmId: c.osmId, sizeSource: 'default', hasLeadIn: !!c.entryLL, needsPushback: true, closed: false, named: !!c.ref,
       });
     }
     // taxilane connectors mapped as parking_position: not stands, but they are pavement the vehicles and tugs use - keep
@@ -1119,6 +1242,29 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
         drop.add(ai && !aj ? i : aj && !ai ? j : stands[i].ref.length > stands[j].ref.length ? i : j);
       }
       if (drop.size) { const keep = stands.filter((_, i) => !drop.has(i)); stands.length = 0; stands.push(...keep); }
+    }
+    // ── one name, one stand (reviewed airports): a second position with the same number beside the first is the same stand
+    //    drawn again and goes; one whose first has gone takes the name; gates numbered afresh in every terminal (JFK) carry
+    //    their terminal's number ("8-12") ──
+    if (laneFixFor.has(icao)) {
+      const base = (r: string) => r.split('#')[0], taken = new Set(stands.map(s => s.ref).filter(r => !r.includes('#'))), drop = new Set<OsmStand>();
+      const group = new Map<string, OsmStand[]>(); for (const s of stands) group.set(base(s.ref), [...(group.get(base(s.ref)) ?? []), s]);
+      const xy = (s: OsmStand) => frame.xy(s.lng, s.lat);
+      const term = (s: OsmStand): string | null => { let best: string | null = null, bd = 260; for (const t of terminalPolys) { const no = t.b.name?.match(/\b[1-9]\b/)?.[0]; if (!no) continue; const d = pointInPoly(xy(s), t.pts) ? 0 : distToPolyEdge(xy(s), t.pts); if (d < bd) { bd = d; best = no; } } return best; };
+      for (const [b, list] of group) {
+        if (!list.some(s => s.ref.includes('#'))) continue;
+        const far = list.some(s => list.some(o => o !== s && Math.hypot(xy(o).x - xy(s).x, xy(o).y - xy(s).y) > 300));
+        if (far && /^\d+$/.test(b) && icao === 'KJFK') {
+          const used = new Set<string>(); taken.delete(b);
+          for (const s of list) { const t = term(s); const ref = t ? `${t}-${b}` : null; if (!ref || used.has(ref) || taken.has(ref)) { drop.add(s); continue; } used.add(ref); taken.add(ref); s.ref = ref; }
+        } else for (const s of list) if (s.ref.includes('#')) { if (taken.has(b)) drop.add(s); else { s.ref = b; taken.add(b); } }
+      }
+      // a number a controller can say: "Y01;Y02" is Y01, "LINK W" and a lone letter are not stands
+      for (const s of stands) if (!drop.has(s) && !/^(\d-)?[A-Z]{0,2}\d{1,3}[A-Z]{0,2}$/.test(s.ref) && icao !== 'KSFO') {
+        const first = s.ref.split(/[;/\s-]/)[0];
+        if (first !== s.ref && /^[A-Z]{0,2}\d{1,3}[A-Z]?$/.test(first) && !taken.has(first)) { s.ref = first; taken.add(first); } else drop.add(s);
+      }
+      if (drop.size) { const keep = stands.filter(s => !drop.has(s)); stands.length = 0; stands.push(...keep); }
     }
     for (const s of stands) s.needsPushback = !(s.type === 'remote' && (s.size === 'A' || s.size === 'B'));
     stands.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
@@ -1272,6 +1418,76 @@ export function buildOsmAirport(icao: string, fc: unknown, opts: BuildOpts = {})
     warnedAirports.add(icao);
     for (const w of warnings) console.warn(`[osmAirport] ${w}`);
   }
+  // somebody else's taxiways, and any scrap of lane that then leads nowhere, come out (their nodes stay: the stand plans
+  // are tied to the graph's size)
+  const military = NOT_CIVIL_TWY[icao];
+  if (military) {
+    for (const n of nodes.values()) n.edges = n.edges.filter(e => !(e.taxiway && military.test(e.taxiway)));
+    const reach = new Set<string>(), todo = stands.map(s => s.entryNodeId).filter((x): x is string => !!x && nodes.has(x));
+    while (todo.length) { const id = todo.pop()!; if (reach.has(id)) continue; reach.add(id); for (const e of nodes.get(id)!.edges) if (!reach.has(e.to)) todo.push(e.to); }
+    for (const [id, n] of nodes) if (!reach.has(id)) n.edges = n.edges.filter(e => e.type === 'runway');
+    // dead ends off the runway that were only the way to those taxiways
+    for (let again = true; again;) { again = false; for (const [id, n] of nodes) { if (n.edges.length !== 1 || n.edges[0].type === 'runway' || n.edges[0].leadIn || n.edges[0].taxiway) continue; const o = nodes.get(n.edges[0].to); if (!o || !o.edges.some(e => e.type === 'runway') && o.edges.length > 2) continue; if (stands.some(s => s.entryNodeId === id)) continue; n.edges = []; o.edges = o.edges.filter(e => e.to !== id); again = true; } }
+    for (const k of [...taxiwayNames]) if (military.test(k)) { taxiwayNames.splice(taxiwayNames.indexOf(k), 1); }
+    for (const k of [...twNodes.keys()]) if (military.test(k)) twNodes.delete(k);
+    for (let i = holdingPositions.length - 1; i >= 0; i--) if (!nodes.get(holdingPositions[i].nodeId)?.edges.length) { holdByNode.delete(holdingPositions[i].nodeId); holdingPositions.splice(i, 1); }
+  }
+  // taxi lanes that lead nowhere any more (to stands that are not there): off the map and out of the routes, nodes kept
+  if (LANES_PRUNED.has(icao)) {
+    const at = stands.map(s => frame.xy(s.lng, s.lat)), serve = new Set(stands.flatMap(s => [s.entryNodeId, s.nodeId]));
+    for (let again = true; again;) {
+      again = false;
+      for (const [id, n] of nodes) {
+        if (n.edges.length !== 1 || n.edges[0].leadIn || n.edges[0].type === 'runway' || serve.has(id)) continue;
+        const p = frame.xy(n.lng, n.lat); if (at.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 110)) continue;
+        const o = nodes.get(n.edges[0].to); if (!o || holdByNode.has(id)) continue;
+        o.edges = o.edges.filter(e => e.to !== id); n.edges = []; again = true;
+      }
+    }
+  }
+  // a long straight edge that used to carry junction points (stands joined it there before their own lane was added): the
+  // points are kept, so the corner onto it is driven as it was settled
+  for (const [lng, lat] of KEEP_POINTS[icao] ?? []) {
+    const p = frame.xy(lng, lat); let best: { a: OsmNode; b: OsmNode; q: XY; d: number } | null = null;
+    for (const n of nodes.values()) for (const e of n.edges) {
+      if (e.type !== 'taxiway' || e.leadIn || n.id >= e.to) continue; const m = nodes.get(e.to)!; const u = frame.xy(n.lng, n.lat), v = frame.xy(m.lng, m.lat);
+      const ex = v.x - u.x, ey = v.y - u.y, L = ex * ex + ey * ey || 1, k = Math.max(0, Math.min(1, ((p.x - u.x) * ex + (p.y - u.y) * ey) / L)), q = { x: u.x + ex * k, y: u.y + ey * k }, d = Math.hypot(q.x - p.x, q.y - p.y);
+      if (d < 6 && k > 0.02 && k < 0.98 && (!best || d < best.d)) best = { a: n, b: m, q, d };
+    }
+    if (best) splitEdge(best.a, best.b, frame.ll(best.q));
+  }
+  for (const [a, b] of CUT_EDGES[icao] ?? []) { const A = nodes.get(a), B = nodes.get(b); if (A && B) { A.edges = A.edges.filter(q => q.to !== b); B.edges = B.edges.filter(q => q.to !== a); } }
+  // straight crossings the map has only as two curves on to the runway and off again (aircraft dipped 30 m down the runway
+  // and back): joined through the runway's own node, so no node is added
+  for (const [a, mid, b, tw] of STRAIGHT_ACROSS[icao] ?? []) {
+    const A = nodes.get(a), B = nodes.get(b); let M = nodes.get(mid); if (!A || !B) continue;
+    if (mid === '*') {                                   // no node of the runway on the line: one is put in where they cross
+      const K = Math.cos(center.lat * Math.PI / 180);
+      for (const rw of runways) { for (let i = 1; i < rw.nodeIds.length && !M; i++) {
+        const u = nodes.get(rw.nodeIds[i - 1])!, v = nodes.get(rw.nodeIds[i])!; if (!u || !v) continue;
+        const rx = (v.lng - u.lng) * K, ry = v.lat - u.lat, sx = (B.lng - A.lng) * K, sy = B.lat - A.lat, den = rx * sy - ry * sx; if (Math.abs(den) < 1e-14) continue;
+        const t = (((A.lng - u.lng) * K) * sy - (A.lat - u.lat) * sx) / den, w = (((A.lng - u.lng) * K) * ry - (A.lat - u.lat) * rx) / den; if (t <= 0.02 || t >= 0.98 || w <= 0 || w >= 1) continue;
+        const uv = u.edges.find(e => e.to === v.id && e.type === 'runway'); if (!uv) continue;
+        const id = `${(u.lng + (v.lng - u.lng) * t).toFixed(6)},${(u.lat + (v.lat - u.lat) * t).toFixed(6)}`;
+        M = { id, lng: u.lng + (v.lng - u.lng) * t, lat: u.lat + (v.lat - u.lat) * t, edges: [] }; nodes.set(id, M);
+        u.edges = u.edges.filter(e => !(e.to === v.id && e.type === 'runway')); v.edges = v.edges.filter(e => !(e.to === u.id && e.type === 'runway'));
+        link(u, M, 'runway', { runway: uv.runway }); link(M, v, 'runway', { runway: uv.runway }); rw.nodeIds.splice(i, 0, id);
+      } if (M) break; }
+    }
+    if (!M) continue;
+    link(A, M, 'taxiway', { taxiway: tw || undefined }); link(M, B, 'taxiway', { taxiway: tw || undefined });
+    for (const n of [M.id, B.id]) if (tw) { const l = twNodes.get(tw); if (l && !l.includes(n)) l.push(n); }
+  }
+  // across a runway by one rapid exit and off by another an aircraft is on the strip for 400 m and more: dear, so a route
+  // takes a real crossing where there is one
+  if (laneFixFor.has(icao) && icao !== 'KSFO') {      // (SFO's H and G do cross 01L at a shallow angle, and its routes are settled)
+    const K = Math.cos(center.lat * Math.PI / 180) * 111320, Y = 111320;
+    for (const rw of runways) {
+      const [p, q] = rw.ends, ux = (q.lng - p.lng) * K, uy = (q.lat - p.lat) * Y, L = Math.hypot(ux, uy) || 1;
+      const at = (n: OsmNode) => ({ off: Math.abs((n.lng - p.lng) * K * uy - (n.lat - p.lat) * Y * ux) / L, al: ((n.lng - p.lng) * K * ux + (n.lat - p.lat) * Y * uy) / L });
+      for (const n of nodes.values()) { const a = at(n); if (a.off > 60 || a.al < -60 || a.al > L + 60) continue; for (const e of n.edges) { if (e.type === 'runway' || e.leadIn) continue; const m = nodes.get(e.to); if (!m) continue; const b = at(m); if (b.off > 60) continue; const dx = (m.lng - n.lng) * K, dy = (m.lat - n.lat) * Y; if (Math.abs(dx * ux + dy * uy) / (L * (Math.hypot(dx, dy) || 1)) > 0.82) e.strip = true; } }
+    }
+  }
   return { icao, center, magVar, nodes, gates, stands, runways, holdingPositions, holdByNode, buildings, stations, taxiwayNames, taxiwayNodes: twNodes, warnings };
 }
 const warnedAirports = new Set<string>();
@@ -1352,14 +1568,22 @@ export function nearestOsmNode(air: OsmAirport, lng: number, lat: number, maxM =
 // ── path helpers ────────────────────────────────────────────
 /** Sequence of taxiway designators a node-id path traverses (consecutive dupes collapsed), e.g. ["A","B","K"]. */
 export function taxiwaysForPath(air: OsmAirport, ids: string[]): string[] {
-  const seq: string[] = [];
+  let seq: { name: string; m: number }[] = [];
   for (let i = 0; i < ids.length - 1; i++) {
     const n = air.nodes.get(ids[i]); if (!n) continue;
     const e = n.edges.find(x => x.to === ids[i + 1]);
-    const name = e?.taxiway;
-    if (name && seq[seq.length - 1] !== name) seq.push(name);
+    if (!e?.taxiway) continue;
+    const last = seq[seq.length - 1]; if (last?.name === e.taxiway) last.m += e.meters; else seq.push({ name: e.taxiway, m: e.meters });
   }
-  return seq;
+  // a few metres of another taxiway's line at a junction are not part of the instruction ("A F A" for 9 m of F where it
+  // crosses A): the same taxiway either side of a short stretch (JFK: H jogs 85 m along A), or a stretch under 12 m, is left out
+  for (let again = true; again;) {
+    again = false;
+    for (let i = 1; i < seq.length - 1 && !again; i++) if ((seq[i - 1].name === seq[i + 1].name && seq[i].m < 125) || seq[i].m < 12) { seq.splice(i, 1); again = true; }
+    const out: typeof seq = []; for (const x of seq) { const l = out[out.length - 1]; if (l?.name === x.name) { l.m += x.m; again = true; } else out.push(x); }
+    seq = out;
+  }
+  return seq.map(x => x.name);
 }
 
 /** Path length in metres along graph edges (straight-line between consecutive nodes when no edge exists). */
@@ -1494,6 +1718,8 @@ export interface FindPathOpts {
   runwayCost?: number;
   /** Runway (ref or end name) that may be used at taxiway cost — e.g. backtrack on the departure runway. */
   allowRunway?: string;
+  /** Metres over which the turn limit holds (default TURN_WINDOW_M). */
+  turnWindowM?: number;
   /** Iteration guard (default 200 000). */
   maxIter?: number;
   /** Direction-aware search: no step may turn more than `maxTurnDeg` from the direction of travel - an airliner
@@ -1512,6 +1738,17 @@ export interface FindPathOpts {
  * favour named taxiways. Signature-compatible with the legacy 3-arg form.
  */
 export function findPath(air: OsmAirport, startId: string, goalId: string, opts: FindPathOpts = {}): string[] | null {
+  if (pathCache.map && (!opts.edgeMult || (opts.edgeMult as { memoKey?: string }).memoKey)) {
+    const j = (x?: Iterable<string>) => (x ? Array.from(x).join(',') : '');
+    const key = `${air.icao}|${startId}|${goalId}|${opts.maxTurnDeg ?? ''}|${opts.startHeading?.toFixed(1) ?? ''}|${j(opts.avoidRunways)}|${j(opts.avoidNodes)}|${j(opts.prefer)}|${opts.runwayCost ?? ''}|${opts.allowRunway ?? ''}|${(opts.edgeMult as { memoKey?: string } | undefined)?.memoKey ?? ''}`;
+    const c = pathCache.map; let v = c.get(key); if (v === undefined) { v = findPathPlain(air, startId, goalId, opts); c.set(key, v); }
+    return v && v.slice();
+  }
+  return findPathPlain(air, startId, goalId, opts);
+}
+/** Route memo for batch tools (scripts/gatelab): off (null) in the game, where traffic changes the costs. */
+export const pathCache: { map: Map<string, string[] | null> | null } = { map: null };
+function findPathPlain(air: OsmAirport, startId: string, goalId: string, opts: FindPathOpts = {}): string[] | null {
   const { nodes } = air;
   const start = nodes.get(startId), goal = nodes.get(goalId);
   if (!start || !goal) return null;
@@ -1529,7 +1766,7 @@ export function findPath(air: OsmAirport, startId: string, goalId: string, opts:
   const c = air.center; const kx = R * Math.cos(c.lat * D2R) * D2R, ky = R * D2R;
   const gx = (goal.lng - c.lng) * kx, gy = (goal.lat - c.lat) * ky;
   const h = (n: OsmNode) => Math.hypot((n.lng - c.lng) * kx - gx, (n.lat - c.lat) * ky - gy);
-  if (opts.maxTurnDeg != null) return findPathDirected(air, startId, goalId, opts.maxTurnDeg, opts.startHeading, { avoidRw, avoidNodes, prefer, runwayCost, allowRef, maxIter, kx, ky, h, edgeMult: opts.edgeMult });
+  if (opts.maxTurnDeg != null) return findPathDirected(air, startId, goalId, opts.maxTurnDeg, opts.startHeading, { avoidRw, avoidNodes, prefer, runwayCost, allowRef, maxIter, kx, ky, h, edgeMult: opts.edgeMult, windowM: opts.turnWindowM });
 
   const open = new MinHeap();
   const came = new Map<string, string>();
@@ -1559,6 +1796,7 @@ export function findPath(air: OsmAirport, startId: string, goalId: string, opts:
       } else if (e.taxiway && prefer.size) {
         mult = prefer.has(e.taxiway) ? 0.55 : 1;
       }
+      if (e.strip) mult *= STRIP_COST;
       if (opts.edgeMult) mult *= opts.edgeMult(cur, e.to);
       const tentative = gCur + e.meters * mult;
       if (tentative < (g.get(e.to) ?? Infinity)) {
@@ -1574,64 +1812,112 @@ export function findPath(air: OsmAirport, startId: string, goalId: string, opts:
 
 /** A* over directed states (the edge the aircraft arrived by), so a turn sharper than `maxTurn` - a reversal on the
  *  spot above all - is never part of the route. */
+const STRIP_COST = 4;
+/** Metres of route cost per degree of turn: a straighter route wins over one that swerves in and out of junctions. */
+const TURN_COST_M = 0.45;
+/** Over any stretch this long the heading may change by at most the turn limit: OSM draws a curve as many short edges,
+ *  and a limit per edge alone let a run of small turns add up to a U-turn (a hairpin round a fillet onto the taxiway
+ *  the aircraft had just left). */
+const TURN_WINDOW_M = 90;
+/** The graph as flat arrays (one slot per directed edge), compiled once per airport: the directed search runs on these. */
+interface FlatGraph { idx: Map<string, number>; ids: string[]; first: Int32Array; to: Int32Array; m: Float64Array; brg: Float64Array; edge: OsmEdge[]; g: Float64Array; seen: Int32Array; done: Int32Array; came: Int32Array; hin: Float64Array; wh: Float64Array; wd: Float64Array; hv: Float64Array; hs: Int32Array; run: number }
+const FLAT = new WeakMap<object, FlatGraph>();
+function flatOf(air: OsmAirport, kx: number, ky: number): FlatGraph {
+  let f = FLAT.get(air.nodes); if (f && f.ids.length === air.nodes.size) return f;
+  const ids = [...air.nodes.keys()], idx = new Map(ids.map((id, i) => [id, i] as const));
+  const first = new Int32Array(ids.length + 1); const to: number[] = [], m: number[] = [], brg: number[] = [], edge: OsmEdge[] = [];
+  ids.forEach((id, i) => {
+    first[i] = to.length; const n = air.nodes.get(id)!;
+    for (const e of n.edges) {
+      const j = idx.get(e.to); if (j == null) continue;
+      const nb = air.nodes.get(e.to)!, dx = (nb.lng - n.lng) * kx, dy = (nb.lat - n.lat) * ky;
+      to.push(j); m.push(e.meters); edge.push(e); brg.push(Math.hypot(dx, dy) < 0.5 ? NaN : (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360);
+    }
+  });
+  first[ids.length] = to.length; const E = to.length + 1;
+  f = { idx, ids, first, to: Int32Array.from(to), m: Float64Array.from(m), brg: Float64Array.from(brg), edge, g: new Float64Array(E), seen: new Int32Array(E), done: new Int32Array(E), came: new Int32Array(E), hin: new Float64Array(E), wh: new Float64Array(E), wd: new Float64Array(E), hv: new Float64Array(ids.length), hs: new Int32Array(ids.length), run: 0 };
+  FLAT.set(air.nodes, f); return f;
+}
 function findPathDirected(air: OsmAirport, startId: string, goalId: string, maxTurn: number, startHeading: number | undefined,
-  k: { avoidRw: Set<string>; avoidNodes: Set<string>; prefer: Set<string>; runwayCost: number; allowRef: string | null; maxIter: number; kx: number; ky: number; h: (n: OsmNode) => number; edgeMult?: (from: string, to: string) => number }): string[] | null {
-  const { nodes } = air;
-  const bearing = (a: OsmNode, b: OsmNode): number | null => {
-    const dx = (b.lng - a.lng) * k.kx, dy = (b.lat - a.lat) * k.ky;
-    return Math.hypot(dx, dy) < 0.5 ? null : (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
-  };
+  k: { avoidRw: Set<string>; avoidNodes: Set<string>; prefer: Set<string>; runwayCost: number; allowRef: string | null; maxIter: number; kx: number; ky: number; h: (n: OsmNode) => number; windowM?: number; edgeMult?: (from: string, to: string) => number }, strict = true): string[] | null {
+  const f = flatOf(air, k.kx, k.ky), goal = f.idx.get(goalId)!, start = f.idx.get(startId)!;
   const turn = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
-  // state = "prev>cur"; the heading of arrival at cur rides along (a zero-length edge keeps the previous one)
-  const hdgIn = new Map<string, number | undefined>([[`>${startId}`, startHeading]]);
-  const nodeOf = new Map<string, string>([[`>${startId}`, startId]]);
-  const came = new Map<string, string>();
-  const g = new Map<string, number>([[`>${startId}`, 0]]);
-  const closed = new Set<string>();
-  const open = new MinHeap();
-  open.push(`>${startId}`, k.h(nodes.get(startId)!));
+  // state 0 = standing at the start; state q + 1 = arrived along directed edge q. NaN = no heading yet
+  const run = ++f.run, { g, seen, done, came, hin, wh, wd } = f;
+  const hOf = (i: number) => { if (f.hs[i] !== run) { f.hs[i] = run; f.hv[i] = k.h(air.nodes.get(f.ids[i])!); } return f.hv[i]; };
+  const at = (st: number) => (st === 0 ? start : f.to[st - 1]);
+  const open = new IntHeap();
+  g[0] = 0; seen[0] = run; hin[0] = wh[0] = startHeading ?? NaN; wd[0] = 0; came[0] = -1;
+  open.push(0, hOf(start));
   let guard = 0;
   while (open.size && guard++ < k.maxIter) {
-    const { id: st, key } = open.pop()!;
-    if (closed.has(st)) continue;
-    const cur = nodeOf.get(st)!;
-    const gCur = g.get(st) ?? Infinity;
-    if (key > gCur + k.h(nodes.get(cur)!) + 1e-6) continue;
-    if (cur === goalId) {
-      const path = [cur]; let p = st;
-      while (came.has(p)) { p = came.get(p)!; path.push(nodeOf.get(p)!); }
-      return path.reverse();
-    }
-    closed.add(st);
-    const node = nodes.get(cur)!, inH = hdgIn.get(st);
-    for (const e of node.edges) {
-      if (k.avoidNodes.has(e.to)) continue;
-      const nb = nodes.get(e.to); if (!nb) continue;
-      const out = bearing(node, nb);
-      if (out != null && inH != null && turn(inH, out) > maxTurn) continue;
+    const key = open.topKey(), st = open.pop();
+    if (done[st] === run) continue;
+    const cur = at(st), gCur = g[st];
+    if (key > gCur + hOf(cur) + 1e-6) continue;
+    if (cur === goal) { const path: string[] = []; for (let p = st; p >= 0; p = came[p]) path.push(f.ids[at(p)]); return path.reverse(); }
+    done[st] = run;
+    const inH = hin[st], w0 = wh[st], d0 = wd[st];
+    for (let q = f.first[cur]; q < f.first[cur + 1]; q++) {
+      const e = f.edge[q]; if (k.avoidNodes.size && k.avoidNodes.has(e.to)) continue;
+      const out = f.brg[q], hasOut = out === out;
+      // onto a stand's lead-in an airliner may turn tighter (slow, on the apron, it swings in): held to 120 degrees the
+      // route passed the stand and drove a loop round the block to come at it from the other side
+      if (hasOut && inH === inH && turn(inH, out) > (e.leadIn ? Math.max(maxTurn, 165) : maxTurn)) continue;
+      if (strict && !e.leadIn && hasOut && w0 === w0 && turn(w0, out) > maxTurn) continue;
       let mult = 1;
       if (e.type === 'runway') {
         if (e.runway && k.avoidRw.has(e.runway)) continue;
         mult = e.runway && e.runway === k.allowRef ? 1 : k.runwayCost;
       } else if (e.taxiway && k.prefer.size) mult = k.prefer.has(e.taxiway) ? 0.55 : 1;
-      if (k.edgeMult) mult *= k.edgeMult(cur, e.to);
-      const ns = `${cur}>${e.to}`;
-      const tentative = gCur + e.meters * mult;
-      if (tentative < (g.get(ns) ?? Infinity)) {
-        came.set(ns, st); g.set(ns, tentative); nodeOf.set(ns, e.to); hdgIn.set(ns, out ?? inH);
-        open.push(ns, tentative + k.h(nb));
+      if (e.strip) mult *= STRIP_COST;
+      if (k.edgeMult) mult *= k.edgeMult(f.ids[cur], e.to);
+      const ns = q + 1, t = gCur + f.m[q] * mult + (strict && hasOut && inH === inH ? TURN_COST_M * turn(inH, out) : 0);
+      if (seen[ns] !== run || t < g[ns]) {
+        const d2 = d0 + f.m[q];
+        seen[ns] = run; g[ns] = t; came[ns] = st; hin[ns] = hasOut ? out : inH;
+        if (d2 > (k.windowM ?? TURN_WINDOW_M)) { wh[ns] = inH === inH ? inH : out; wd[ns] = f.m[q]; } else { wh[ns] = w0 === w0 ? w0 : out; wd[ns] = d2; }
+        open.push(ns, t + hOf(f.to[q]));
       }
     }
   }
-  return null;
+  // nothing without a hairpin anywhere: the old rule (per-edge limit only) rather than no route
+  return strict ? findPathDirected(air, startId, goalId, maxTurn, startHeading, k, false) : null;
+}
+class IntHeap {
+  private s: number[] = []; private k: number[] = [];
+  get size(): number { return this.s.length; }
+  topKey(): number { return this.k[0]; }
+  push(st: number, key: number): void {
+    const s = this.s, k = this.k; let i = s.length; s.push(st); k.push(key);
+    while (i > 0) { const p = (i - 1) >> 1; if (k[p] <= key) break; s[i] = s[p]; k[i] = k[p]; s[p] = st; k[p] = key; i = p; }
+  }
+  pop(): number {
+    const s = this.s, k = this.k, top = s[0], ls = s.pop()!, lk = k.pop()!, n = s.length;
+    if (n) {
+      s[0] = ls; k[0] = lk; let i = 0;
+      for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < n && k[l] < k[m]) m = l; if (r < n && k[r] < k[m]) m = r; if (m === i) break; const a = s[m], b = k[m]; s[m] = s[i]; k[m] = k[i]; s[i] = a; k[i] = b; i = m; }
+    }
+    return top;
+  }
 }
 
 /**
- * Route through named taxiways: for each designator in `via` (in order) the path
- * goes to the nearest node on that taxiway, then to the goal. Returns null when
- * any leg is unreachable or a designator is unknown.
+ * Route through named taxiways: for each designator in `via` (in order) the path goes to the nearest node on that
+ * taxiway, then to the goal - unless that loops (a node visited twice), takes more runway crossings or runs over 1.3
+ * times the length of the shortest route along the names in order, which is then used instead (a cleared route of
+ * eight names at SFO looped across 28L and 28R four extra times). Null when any designator is unknown or unreachable.
  */
 export function routeVia(air: OsmAirport, startId: string, via: string[], goalId: string, opts: FindPathOpts = {}): string[] | null {
+  const near = routeViaNearest(air, startId, via, goalId, opts);
+  const ordered = routeViaOrdered(air, startId, via, goalId, opts);
+  if (!near || !ordered) return near ?? ordered;
+  const entries = (ids: string[]) => { let n = 0, on = false; for (let i = 1; i < ids.length; i++) { const e = air.nodes.get(ids[i - 1])?.edges.find(x => x.to === ids[i]); const r = e?.type === 'runway'; if (r && !on) n++; on = r; } return n; };
+  const loops = new Set(near).size < near.length;
+  return loops || entries(near) > entries(ordered) || pathLengthM(air, near) > 1.3 * pathLengthM(air, ordered) ? ordered : near;
+}
+
+function routeViaNearest(air: OsmAirport, startId: string, via: string[], goalId: string, opts: FindPathOpts = {}): string[] | null {
   let cur = startId; const out: string[] = [startId];
   const from = air.nodes.get(startId); if (!from) return null;
   // a direction-aware route carries the heading of the last leg into the next one (no reversal at a waypoint)
@@ -1664,4 +1950,53 @@ export function routeVia(air: OsmAirport, startId: string, via: string[], goalId
   const last = findPath(air, cur, goalId, { ...opts, startHeading: arriveHdg() }); if (!last) return null;
   out.push(...last.slice(1));
   return out;
+}
+
+
+function routeViaOrdered(air: OsmAirport, startId: string, via: string[], goalId: string, opts: FindPathOpts = {}): string[] | null {
+  // The shortest route that runs along each named taxiway in the order given (at least one stretch of each), as one
+  // search over (node, how many names done). The old way - walk to the named taxiway's node NEAREST the aircraft, then
+  // on to the next - went back to a point already passed when a name came twice or a taxiway curved round, and a
+  // cleared route of eight names looped across 28L and 28R four extra times.
+  const { nodes } = air;
+  if (!nodes.has(startId) || !nodes.has(goalId)) return null;
+  const names: string[] = [];
+  for (const raw of via) { const n = raw.toUpperCase(); if (!air.taxiwayNodes.get(n)?.length) return null; if (names[names.length - 1] !== n) names.push(n); }
+  const avoidRw = new Set<string>();
+  for (const r of opts.avoidRunways ?? []) { const rw = runwayFor(air, r); if (rw) avoidRw.add(rw.ref); }
+  const avoidNodes = new Set<string>(opts.avoidNodes ?? []); avoidNodes.delete(startId); avoidNodes.delete(goalId);
+  const runwayCost = opts.runwayCost ?? RUNWAY_COST;
+  const allowRef = opts.allowRunway ? runwayFor(air, opts.allowRunway)?.ref ?? null : null;
+  const c = air.center; const kx = R * Math.cos(c.lat * D2R) * D2R, ky = R * D2R;
+  const turn = (a: number, b: number) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+  const maxTurn = opts.maxTurnDeg;
+  // state = layer x (directed edge arrived by, or the node when there is no turn limit and the edge does not matter)
+  const f = flatOf(air, kx, ky), goal = f.idx.get(goalId)!, start = f.idx.get(startId)!, NE = f.to.length, NN = f.ids.length, per = maxTurn != null ? NE + 1 : NN;
+  const LN = names.length, total = per * (LN + 1);
+  const g = new Float64Array(total).fill(Infinity), came = new Int32Array(total).fill(-1), node = new Int32Array(total), hin = new Float64Array(total).fill(NaN), done = new Uint8Array(total);
+  const gn = nodes.get(goalId)!, hv = new Float64Array(NN).fill(-1);
+  const hOf = (i: number) => { if (hv[i] < 0) { const n = nodes.get(f.ids[i])!; hv[i] = 0.6 * Math.hypot((n.lng - gn.lng) * kx, (n.lat - gn.lat) * ky); } return hv[i]; };   // a named taxiway costs 0.6 a metre
+  const s0 = maxTurn != null ? NE : start;
+  const open = new IntHeap(); g[s0] = 0; node[s0] = start; hin[s0] = opts.startHeading ?? NaN; open.push(s0, hOf(start));
+  let guard = 0; const maxIter = opts.maxIter ?? 400000;
+  while (open.size && guard++ < maxIter) {
+    const st = open.pop(); if (done[st]) continue; done[st] = 1;
+    const layer = Math.floor(st / per), cur = node[st], hdg = hin[st], cost = g[st];
+    if (cur === goal && layer === LN) { const out: string[] = []; for (let p = st; p >= 0; p = came[p]) { const n = f.ids[node[p]]; if (out[out.length - 1] !== n) out.push(n); } return out.reverse(); }
+    for (let q = f.first[cur]; q < f.first[cur + 1]; q++) {
+      const e = f.edge[q]; if (avoidNodes.size && avoidNodes.has(e.to)) continue;
+      const out = f.brg[q];
+      if (maxTurn != null && out === out && hdg === hdg && turn(hdg, out) > (e.leadIn ? Math.max(maxTurn, 165) : maxTurn)) continue;
+      let mult = 1;
+      if (e.type === 'runway') { if (e.runway && avoidRw.has(e.runway)) continue; mult = e.runway && e.runway === allowRef ? 1 : runwayCost; }
+      // keep to the named ones: along the taxiway being followed or the next one cheap, along any other named taxiway
+      // dear (a cleared "S3 N3 A1" wove along A2 and A3 and only touched A1 at the end), unnamed connectors as they are
+      else if (e.taxiway) mult = e.taxiway === names[layer] || e.taxiway === names[layer - 1] ? 0.6 : 1.6;
+      if (opts.edgeMult) mult *= opts.edgeMult(f.ids[cur], e.to);
+      const nl = layer < LN && e.taxiway === names[layer] ? layer + 1 : layer;
+      const ns = nl * per + (maxTurn != null ? q : f.to[q]), t = cost + f.m[q] * mult;
+      if (t < g[ns]) { g[ns] = t; came[ns] = st; node[ns] = f.to[q]; hin[ns] = out === out ? out : hdg; open.push(ns, t + hOf(f.to[q])); }
+    }
+  }
+  return null;
 }

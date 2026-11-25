@@ -54,6 +54,10 @@ export interface Goal {
   optional?: boolean
   /** Show only once this is true (e.g. the aircraft has reached the hold). */
   when?: (L: Live) => boolean
+  /** Freeze the game on this call until the player gives it (the camera is on the aircraft): time to read and look. */
+  hold?: boolean
+  /** Map cues sent once, when this becomes the objective (e.g. the camera locks onto the aircraft for its takeoff). */
+  cues?: (L: Live) => Cue[]
 }
 
 export interface Story {
@@ -71,6 +75,8 @@ export interface Chapter {
   story?: Story
   setup: (e: SimEngine) => Ctx
   cues?: (L: Live) => Cue[]
+  /** Which side of its aircraft the course card sits (default: right, else left): away from what the player watches. */
+  card?: 'left' | 'right'
   goals: Goal[]
   /** A word from the coach on something the player did (or that happened). */
   react?: (L: Live, ev: SimEvent) => string | null
@@ -80,6 +86,8 @@ export interface Chapter {
   tick?: (L: Live) => void
   /** A lesson drawn by the page itself, not on the sim (Radio 101). */
   ui?: 'radio'
+  /** Fast-forward while this is true (e.g. the long taxi to the runway nobody needs to watch in real time). */
+  fastWhile?: (L: Live) => boolean
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -97,6 +105,9 @@ const xyOf = (a: AircraftState | undefined): XY => (a ? { x: a.pos.x, y: a.pos.y
 /** The tutorial's runway set-up and a clean field: no traffic, no auto-spawn, the AI on every position but the player's. */
 export function baseScene(e: SimEngine, position: PlayerPosition, parked = true): void {
   e.clear()
+  e.settings.autoHandoff = false   // the handoffs are the player's to give (an arrival switched to tower by itself at 10 NM)
+  e.settings.autoMode = false      // the lessons are scripted: no AI working the other sector behind the coach's back
+  e.weather.setState({ visM: 10000, ceilingFt: null, cloud: 'CAVOK', precip: 'none' })   // the course is flown in clear weather
   e.setActiveRunways(DEP_RWYS, ARR_RWYS)
   seat(e, position)
   if (parked) e.populateParked(0.7)
@@ -111,6 +122,7 @@ export function seat(e: SimEngine, position: PlayerPosition): void {
   e.settings.autoApproach = position !== 'approach'
   e.settings.emergencyRate = 'off'
   e.settings.pilotErrorRate = 0
+  e.settings.quietCrews = true
   e.settings.pilotDelayOverride = 1   // quick readbacks while learning
 }
 /** Move the sim on quickly (setup only): fixed steps until pred or maxS. */
@@ -145,6 +157,8 @@ function routeCue(id: string, pv: NonNullable<ReturnType<typeof routePreview>>, 
   return { kind: 'route', id, pts: pv.path.pts, legs: pv.legs.map((l, i) => ({ ...l, delayMs: 600 + i * stepMs })) }
 }
 const camOn = (a: AircraftState | undefined, dist: number, pitch = 0.75, yaw?: number, ms = 1600): Cue => ({ kind: 'camera', at: xyOf(a), dist, pitch, yaw, ms })
+/** The takeoff: the camera behind the aircraft, looking down its runway, and locked on it (kept in the middle). */
+const takeoffCam = (L: Live, rwy = '01R', a = ac(L)): Cue[] => { const h = (L.e.runwayByEnd(rwy)?.end.trueHdg ?? 28) * Math.PI / 180; return a ? [{ ...camOn(a, 520, 0.5, -h, 1400), follow: a.id } as Cue] : [] }
 
 // ---------------------------------------------------------------------------------------------------------------------
 // GROUND: one departure's journey from stand C9 (Terminal 3) to runway 01R, which crosses 01L on the way
@@ -160,6 +174,14 @@ function keep(e: SimEngine, ok: (a: AircraftState) => boolean, data: Record<stri
 }
 const holdsAhead = (a: AircraftState) => (a.path?.holds ?? []).filter(h => !h.isDepartureEntry && h.at > a.distAlong - 5)
 const toFirstHold = (a: AircraftState) => { const h = holdsAhead(a)[0]; return h ? h.at - a.distAlong : Infinity }
+// the route to teach, taxiway by taxiway: worked out when the mission opens, and again (once the push is done) if it
+// came back empty then; without it the call read "taxi to runway 01R" and taught no route at all
+function taxiNames(L: Live): string[] {
+  const n = L.ctx.data.names as string[] | undefined
+  if (n?.length) return n
+  const a = ac(L); const pv = a && a.phase !== 'pushback' ? routePreview(L.e, a, '01R') : null
+  return (L.ctx.data.names = pv?.names ?? [])
+}
 const taxiing = (a: AircraftState) => a.phase === 'taxi' && a.path?.kind === 'taxi'
 /** Fresh: the 747 on its stand, asking for pushback. */
 function freshPush(e: SimEngine): AircraftState { baseScene(e, 'ground'); return departureAtStand(e, GCS, freeStand(e, G_STAND), G_TYPE) }
@@ -293,12 +315,15 @@ const GROUND: Chapter[] = [
       return out
     },
     goals: [
-      { id: 'taxi', title: 'Clear it to the runway', why: 'Name the runway and the route, taxiway by taxiway. Leave the route out and the pilot takes the usual one.', say: (L) => { const n = (L.ctx.data.names as string[] | undefined) ?? []; return `${L.ctx.cs} taxi to runway 01R${n.length ? ` via ${n.join(' ')}` : ''}` }, done: (L) => { const a = ac(L); return !!a && (a.plan.taxiRoute?.length ?? 0) > 0 && (a.phase === 'taxi' || a.phase === 'startup') && saidAny(L, L.ctx.cs, ['taxi']) } },
+      // the push mission ends as the tug lets go: the taxi call waits for the engines (given earlier it was held back
+      // until then, and the card kept asking for it while the aircraft was still being pushed)
+      { id: 'start', title: 'Engines starting', why: 'The tug is off. The crew starts the engines, then calls you for taxi.', done: (L) => { const a = ac(L); return !!a && (a.phase === 'taxi' || (a.phase === 'startup' && a.startup.enginesStable)) } },
+      { id: 'taxi', title: 'Give it the taxi route', why: 'A taxi clearance is where to go and how: the runway, then the taxiways in order. The pilot follows exactly that route.', say: (L) => { const n = taxiNames(L); return `${L.ctx.cs} taxi to runway 01R${n.length ? ` via ${n.join(' ')}` : ''}` }, done: (L) => { const a = ac(L); return !!a && (a.plan.taxiRoute?.length ?? 0) > 0 && (a.phase === 'taxi' || a.phase === 'startup') && saidAny(L, L.ctx.cs, ['taxi']) } },
       { id: 'own', title: 'Try a different route', why: 'Give it another route: it re-plans from where it is.', optional: true, done: (L) => L.events.filter(ev => ev.type === 'readback' && ev.callsign === L.ctx.cs && ev.data?.type === 'readback' && ev.data.ast?.kind === 'taxi').length >= 2 },
     ],
     react: (L, ev) => {
       if (ev.type !== 'readback' || ev.callsign !== L.ctx.cs || ev.data?.type !== 'readback' || ev.data.ast?.kind !== 'taxi') return null
-      const a = ac(L); const mine = a?.plan.taxiRoute?.join(' ') ?? ''; const sug = ((L.ctx.data.names as string[] | undefined) ?? []).join(' ')
+      const a = ac(L); const mine = a?.plan.taxiRoute?.join(' ') ?? ''; const sug = taxiNames(L).join(' ')
       return mine && sug && mine !== sug ? `Your own route: ${mine}. That works: the pilot follows what you said.` : 'Route given. On the way it has to cross runway 01L: that comes later.'
     },
   },
@@ -334,10 +359,14 @@ const GROUND: Chapter[] = [
       const a = ac(L); if (swaRolled || !a) return
       if (a.phase === 'hold_short' || toFirstHold(a) < 140) { swaRolled = true; say(L.e, 'SWA902 runway 01L cleared for takeoff', RUN) }
     },
-    cues: (L) => { const a = ac(L); const h = a?.path?.holds?.find(x => x.runway === '01L' || x.runway === '19R'); const p = h && a?.path ? a.path.pts[a.path.cum.findIndex(c => c >= h.at)] ?? xyOf(a) : xyOf(a); return [{ kind: 'clear' }, { kind: 'camera', at: p, dist: 900, pitch: 0.95, ms: 2000 }, { kind: 'mark', id: 'hold', at: p, label: 'Hold short · runway 01L', tone: 'stop' }] },
+    cues: (L) => { const a = ac(L); const h = a?.path?.holds?.find(x => x.runway === '01L' || x.runway === '19R'); const p = h && a?.path ? a.path.pts[a.path.cum.findIndex(c => c >= h.at)] ?? xyOf(a) : xyOf(a); // low, looking up runway 01L from just behind the hold line: our aircraft lower middle, the departure rolling past it
+      const h01 = (L.e.runwayByEnd('01L')?.end.trueHdg ?? 28) * Math.PI / 180
+      const at = { x: p.x + 90 * Math.sin(h01), y: p.y + 90 * Math.cos(h01) }
+      return [{ kind: 'clear' }, { kind: 'camera', at, dist: 650, pitch: 0.55, yaw: -h01, ms: 2000 }, { kind: 'mark', id: 'hold', at: p, label: 'Hold short · runway 01L', tone: 'stop' }] },
+    card: 'left',   // the runway (and the departure on it) is to the aircraft's right
     goals: [
       { id: 'wait', title: 'Let the departure go first', why: 'It stops at the 01L hold line by itself. A Southwest 737 is rolling on 01L: crossing in front of it is a runway incursion, the worst thing on the ground. Wait until it is airborne.', done: (L) => { const b = L.e.find('SWA902'); return swaRolled && (!b || (b.phase !== 'takeoff' && b.altitude > 300)) && !L.e.runwayOccupied('01L') } },
-      { id: 'cross', title: 'Clear it across', why: 'Name the runway: "cross runway 01L". It crosses, then reports vacated.', say: (L) => `${L.ctx.cs} cross runway 01L`, done: (L) => { const a = ac(L); return !!a && saidAny(L, L.ctx.cs, ['cross']) && a.holdShortRunway !== '01L' && a.phase !== 'hold_short' }, when: (L) => { const b = L.e.find('SWA902'); return swaRolled && (!b || (b.phase !== 'takeoff' && b.altitude > 300)) } },
+      { id: 'cross', title: 'Clear it across', why: 'Name the runway: "cross runway 01L". It crosses, then reports vacated.', say: (L) => `${L.ctx.cs} cross runway 01L`, done: (L) => { const a = ac(L); return !!a && saidAny(L, L.ctx.cs, ['cross']) && !(a.phase === 'hold_short' && (a.holdShortRunway === '01L' || a.holdShortRunway === '19R')) && !holdsAhead(a).some(h => h.runway === '01L' || h.runway === '19R') }, when: (L) => { const b = L.e.find('SWA902'); return swaRolled && (!b || (b.phase !== 'takeoff' && b.altitude > 300)) } },
     ],
     react: (L, ev) => {
       if (ev.type === 'alert' && ev.data?.type === 'alert' && ev.data.alert.kind === 'runway_incursion') return 'Runway incursion: it went onto 01L while it was in use. Hold it, and next time wait for the runway to be clear.'
@@ -380,6 +409,62 @@ function arrivalOnFinal(e: SimEngine, cs: string, runway: string, nm: number, ty
   return a
 }
 const thr = (e: SimEngine, rwy: string): XY => e.thresholdXY(rwy) ?? { x: 0, y: 0 }
+/** For an arrival on `rwy`: a named exit a normal rollout reaches (1.4-2.8 km in) and a free stand it can taxi to from
+ *  there without crossing a runway, so the taxi in is one call. The stand becomes the aircraft's. */
+function arrivalPlan(e: SimEngine, a: AircraftState, rwy: string): { exit: string; stand: string; via: string[] } | null {
+  const r = e.runwayByEnd(rwy); if (!r) return null
+  const t = thr(e, rwy), h = r.end.trueHdg * Math.PI / 180, ux = Math.sin(h), uy = Math.cos(h)
+  const along = (p: XY) => (p.x - t.x) * ux + (p.y - t.y) * uy, side = (p: XY) => Math.sign((p.x - t.x) * uy - (p.y - t.y) * ux)
+  // empty stands: nobody assigned, nobody parked on it (the apron's parked airframes are not in occupiedBy) or next to it
+  const parked = e.parked.map(p => p.pos)
+  const free = e.gates.filter(g => !g.occupiedBy && !g.reservedFor && !g.closed && !parked.some(q => { const xy = e.nodeXY(g.nodeId); return !!xy && Math.hypot(q.x - xy.x, q.y - xy.y) < 50 }))
+  let best: { exit: string; stand: string; via: string[]; score: number } | null = null
+  for (const ex of e.runwayExits((r.rw as unknown as { ref: string }).ref)) {
+    const d = along(ex.xy); if (!ex.taxiway || d < 1400 || d > 2800) continue
+    const twy = e.nodeXY(ex.twyNodeId); if (!twy) continue
+    const fake = { ...a, phase: 'taxi', pos: { x: twy.x, y: twy.y }, heading: (Math.atan2(twy.x - ex.xy.x, twy.y - ex.xy.y) * 180 / Math.PI + 360) % 360, path: null, requests: [] } as unknown as AircraftState
+    const near = free.map(g => ({ g, xy: e.nodeXY(g.nodeId) })).filter(x => x.xy && side(x.xy) === side(twy)).sort((p, q) => Math.hypot(p.xy!.x - twy.x, p.xy!.y - twy.y) - Math.hypot(q.xy!.x - twy.x, q.xy!.y - twy.y)).slice(0, 40)
+    for (const { g } of near) {
+      const pv = e.previewTaxi(fake, { kind: 'stand', ref: g.ref }); if (!pv || pv.crossings.some(c => c.at > 60)) continue
+      // onward from the exit, never back the way it came (a route behind the nose meant a U-turn and a long backtrack)
+      if (Math.abs(turnAhead(pv.path, fake.heading)) > 60) continue
+      // a route worth giving: three or four taxiways, a kilometre or two (not the stand next to the exit)
+      const n = pv.names.length, len = pv.path.total
+      const score = Math.abs(d - 1900) + (n < 3 ? 3000 : n > 4 ? 800 * (n - 4) : 0) + Math.abs(len - 1600) * 0.5
+      if (!best || score < best.score) best = { exit: ex.taxiway, stand: g.ref, via: pv.names, score }
+    }
+  }
+  if (!best) return null
+  for (const g of e.gates) if (g.reservedFor === a.id) g.reservedFor = null
+  const g = e.gates.find(x => x.ref === best!.stand)!; g.reservedFor = a.id; a.reservedStand = g.ref; a.plan.gateRef = g.ref
+  return { exit: best.exit, stand: best.stand, via: best.via }
+}
+/** The biggest heading change over a path's first 150 m, from `hdg` (degrees, signed). */
+function turnAhead(p: { pts: XY[]; cum: number[] }, hdg: number): number {
+  let worst = 0
+  for (let i = 1; i < p.pts.length && p.cum[i] < 150; i++) {
+    const h = Math.atan2(p.pts[i].x - p.pts[i - 1].x, p.pts[i].y - p.pts[i - 1].y) * 180 / Math.PI
+    const d = ((h - hdg + 540) % 360) - 180; if (Math.abs(d) > Math.abs(worst)) worst = d
+  }
+  return worst
+}
+/** The taxi-in route to give, taxiway by taxiway: worked out again from where the aircraft actually left the runway. */
+function standVia(L: Live): string[] {
+  const d = L.ctx.data; const a = ac(L)
+  if (!d.viaFixed && a && offRunway(a) && d.stand) { const pv = L.e.previewTaxi(a, { kind: 'stand', ref: d.stand as string }); if (pv?.names.length) d.via = pv.names; d.viaFixed = true }
+  return (d.via as string[] | undefined) ?? []
+}
+const offRunway = (a: AircraftState | undefined) => !!a && (a.phase === 'taxi' || a.phase === 'hold_short' || a.phase === 'arrived' || a.phase === 'parked')
+
+/** The course's tour: the 747 quietly on its stand (no request yet), the field otherwise still. */
+export function tourScene(e: SimEngine): string {
+  baseScene(e, 'ground')
+  const stand = freeStand(e, G_STAND); clearStand(e, stand)
+  e.spawnAt({ callsign: GCS, type: G_TYPE, kind: 'departure', phase: 'parked', gate: stand, plan: { runway: '01R' }, onFrequency: 'ground' })
+  return stand
+}
+export const COURSE_CS = GCS
+const atRunway = (a: AircraftState | undefined) => !a || ['lineup', 'takeoff', 'climb', 'departed'].includes(a.phase) || a.altitude > 0 || (a.phase === 'hold_short' && (!a.holdShortRunway || a.holdShortRunway === '01R' || a.holdShortRunway === '19L'))
 
 const TOWER: Chapter[] = [
   {
@@ -390,7 +475,7 @@ const TOWER: Chapter[] = [
     cues: (L) => [{ kind: 'clear' }, { kind: 'camera', at: thr(L.e, '01R'), dist: 700, pitch: 0.55, ms: 2200 }, { kind: 'mark', id: 'hp', at: xyOf(ac(L)), label: `${L.ctx.cs} · ready, runway 01R`, tone: 'info' }],
     goals: [
       { id: 'lineup', title: 'Line it up', why: '"Line up and wait": it taxis onto the runway and stops on the centreline. Useful while you wait for the gap.', say: (L) => `${L.ctx.cs} runway 01R line up and wait`, done: (L) => { const a = ac(L); return !!a && ['lineup', 'takeoff', 'climb'].includes(a.phase) } },
-      { id: 'takeoff', title: 'Clear it for takeoff', why: 'Runway and clearance in one call. Check the runway and the approach are clear first: nothing on final for 28L near the intersection.', say: (L) => `${L.ctx.cs} runway 01R cleared for takeoff`, done: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.phase === 'climb' || a.altitude > 0 } },
+      { id: 'takeoff', title: 'Clear it for takeoff', why: 'Runway and clearance in one call. Check the runway and the approach are clear first: nothing on final for 28L near the intersection.', say: (L) => `${L.ctx.cs} runway 01R cleared for takeoff`, cues: (L) => takeoffCam(L), done: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.phase === 'climb' || a.altitude > 0 } },
       { id: 'away', title: 'Watch it climb out', why: 'Once airborne it goes to departure by itself. The runway is yours again.', done: (L) => { const a = ac(L); return !a || a.altitude > 400 }, when: (L) => ac(L)?.phase === 'takeoff' },
     ],
   },
@@ -398,12 +483,18 @@ const TOWER: Chapter[] = [
     id: 't-land', tab: 'tower', title: 'Cleared to land',
     summary: 'Every arrival needs "cleared to land" before it crosses the threshold. No clearance, no landing: it goes around.',
     story: { from: 146, to: 212, lines: [[148, 'On the ILS, a mile every twenty seconds, three degrees down to the runway.'], [176, 'The tower has to say three words before the threshold: cleared to land.'], [198, 'Touchdown 300 metres in, then off the runway at the first fast exit.']] },
-    setup: (e) => { baseScene(e, 'tower'); arrivalOnFrequency(e, LCS, '28L', 7); return { cs: LCS, others: [], data: {} } },
-    cues: (L) => [{ kind: 'clear' }, { kind: 'camera', at: thr(L.e, '28L'), dist: 2400, pitch: 0.5, ms: 2400 }],
+    setup: (e) => { baseScene(e, 'tower'); const a = shortFinal(e, LCS, '28L', SHORT_FINAL_M); const p = arrivalPlan(e, a, '28L'); return { cs: LCS, others: [], data: { exit: p?.exit ?? null, stand: p?.stand ?? a.reservedStand ?? null, via: p?.via ?? [] } } },
+    // the game holds still on the arrival, the runway ahead of it, until the landing clearance is given; then the camera
+    // rides along: the landing, the turn off, the taxi to the gate
+    // close behind the Airbus, frozen in the air on final, the runway ahead of it; the camera stays locked on it after
+    cues: (L) => { const a = ac(L), t = thr(L.e, '28L'), p = xyOf(a); const brg = Math.atan2(t.x - p.x, t.y - p.y); return [{ kind: 'clear' } as Cue, { kind: 'camera', at: p, dist: 420, pitch: 0.42, yaw: -brg, ms: 2400, follow: a?.id }] },
     goals: [
-      { id: 'land', title: 'Clear it to land', why: 'Runway first, then the clearance: "runway 28L, cleared to land". Give it once the runway will be free when it arrives.', say: (L) => `${L.ctx.cs} runway 28L cleared to land`, done: (L) => !!ac(L)?.landingCleared || happened(L, 'touchdown', L.ctx.cs) },
-      { id: 'down', title: 'Watch the landing', why: 'It touches down, slows and turns off. Then it belongs to ground.', done: (L) => happened(L, 'touchdown', L.ctx.cs) || ['rollout', 'taxi', 'arrived', 'parked'].includes(ac(L)?.phase ?? ''), when: (L) => !!ac(L)?.landingCleared },
-      { id: 'ground', title: 'Send it to ground', why: '"Contact ground" when it is off the runway, so ground can taxi it in.', say: (L) => `${L.ctx.cs} contact ground`, done: (L) => ac(L)?.onFrequency === 'ground' || !ac(L), when: (L) => happened(L, 'touchdown', L.ctx.cs), optional: true },
+      { id: 'land', hold: true, title: 'Clear it to land', why: 'An arrival on final for 28L. The game waits for you: runway first, then "cleared to land".', say: (L) => `${L.ctx.cs} runway 28L cleared to land`, done: (L) => !!ac(L)?.landingCleared || happened(L, 'touchdown', L.ctx.cs) },
+      { id: 'touch', title: 'Watch it land', why: 'Over the threshold at 50 feet, flare, main wheels down about 300 metres in.', done: (L) => happened(L, 'touchdown', L.ctx.cs) || offRunway(ac(L)) || !ac(L), when: (L) => !!ac(L)?.landingCleared },
+      { id: 'exit', hold: true, title: 'Tell it where to turn off', why: 'It is rolling out. Give it the exit: it brakes for that turn, and the runway is free sooner.', say: (L) => L.ctx.data.exit ? `${L.ctx.cs} exit at ${L.ctx.data.exit}` : null, done: (L) => saidAny(L, L.ctx.cs, ['exitAt']) || offRunway(ac(L)), when: (L) => !!L.ctx.data.exit && happened(L, 'touchdown', L.ctx.cs) },
+      { id: 'down', title: 'Watch it turn off', why: 'It slows down and turns off onto the exit you gave.', done: (L) => offRunway(ac(L)) || !ac(L), when: (L) => happened(L, 'touchdown', L.ctx.cs) },
+      { id: 'taxi', hold: true, title: 'Taxi it to its gate', why: 'Off the runway, it waits for you. Give it the stand and the route, taxiway by taxiway, as on the way out.', say: (L) => L.ctx.data.stand ? `${L.ctx.cs} taxi to stand ${L.ctx.data.stand}${standVia(L).length ? ` via ${standVia(L).join(' ')}` : ''}` : null, done: (L) => saidAny(L, L.ctx.cs, ['taxi']) || !ac(L) || ac(L)?.phase === 'arrived', when: (L) => offRunway(ac(L)) && !!L.ctx.data.stand },
+      { id: 'park', title: 'Watch it park', why: 'It taxis in and stops on its stand. Engines off: one more safe arrival.', done: (L) => !ac(L) || ac(L)?.phase === 'arrived' || ac(L)?.phase === 'parked', when: (L) => saidAny(L, L.ctx.cs, ['taxi']) },
     ],
   },
   {
@@ -414,7 +505,7 @@ const TOWER: Chapter[] = [
     goals: [
       { id: 'land', title: 'Clear the arrival to land', why: `${LCS} is 3 miles out on 28L. It lands first.`, say: () => `${LCS} runway 28L cleared to land`, done: (L) => !!L.e.find(LCS)?.landingCleared || happened(L, 'touchdown', LCS) },
       { id: 'wait', title: 'Hold the departure until the arrival is past the intersection', why: 'Let it land and slow down past 01R before the departure rolls. "Line up and wait" now is fine; the takeoff clearance waits.', done: (L) => { const b = L.e.find(LCS); return happened(L, 'touchdown', LCS) && (!b || b.speed < 60) } },
-      { id: 'go', title: 'Then clear the departure', why: 'Runway free, no one close on final: cleared for takeoff.', say: (L) => `${L.ctx.cs} runway 01R cleared for takeoff`, done: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.phase === 'climb' }, when: (L) => happened(L, 'touchdown', LCS) },
+      { id: 'go', title: 'Then clear the departure', why: 'Runway free, no one close on final: cleared for takeoff.', say: (L) => `${L.ctx.cs} runway 01R cleared for takeoff`, cues: (L) => takeoffCam(L), done: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.phase === 'climb' }, when: (L) => happened(L, 'touchdown', LCS) },
     ],
     react: (L, ev) => (ev.type === 'alert' && ev.data?.type === 'alert' && (ev.data.alert.kind === 'occupied_runway_clearance' || ev.data.alert.kind === 'runway_incursion') ? 'Too soon: both would be at the intersection together. Cancel the takeoff ("hold position, cancel takeoff clearance"), or send the arrival around.' : null),
   },
@@ -433,7 +524,34 @@ const TOWER: Chapter[] = [
     ],
     react: (L, ev) => (ev.type === 'go_around' && ev.callsign === L.ctx.cs ? 'Going around. Nobody minds: a go-around is always better than a crowded runway.' : null),
   },
+  {
+    id: 't-follow', tab: 'tower', title: 'Line up, take off',
+    summary: 'The same 747, now on the tower frequency. The runway belongs to the tower: nothing goes onto it without your clearance.',
+    setup: (e) => { baseScene(e, 'tower'); departureAtHold(e, GCS, '01R', G_TYPE); return { cs: GCS, others: [], data: {} } },
+    resume: (e) => {
+      const a = gAc(e); if (!a || a.altitude > 0 || !['taxi', 'hold_short', 'startup'].includes(a.phase)) return null
+      seat(e, 'tower'); a.onFrequency = 'tower'
+      return { cs: GCS, others: [], data: {} }
+    },
+    cues: (L) => [{ kind: 'clear' }, { ...camOn(ac(L), 650, 0.6, undefined, 2000), follow: ac(L)?.id }],
+    fastWhile: (L) => !atRunway(ac(L)),
+    goals: [
+      { id: 'reach', title: 'Let it reach the runway', why: 'It taxis to the hold line of 01R and calls: ready for departure. Fast-forward is on until it gets there.', done: (L) => atRunway(ac(L)) },
+      { id: 'lineup', title: 'Line it up', why: '"Line up and wait": it rolls onto the runway and stops on the centreline, pointing down it.', say: (L) => `${L.ctx.cs} runway 01R line up and wait`, done: (L) => { const a = ac(L); return !a || ['lineup', 'takeoff', 'climb', 'departed'].includes(a.phase) || a.altitude > 0 } },
+      { id: 'takeoff', title: 'Clear it for takeoff', why: 'Runway and clearance in one call. Before you say it: nobody on the runway, nobody about to land across it.', say: (L) => `${L.ctx.cs} runway 01R cleared for takeoff`, cues: (L) => takeoffCam(L), done: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.phase === 'climb' || a.altitude > 0 } },
+      { id: 'away', title: 'Watch it fly', why: 'Full power, 160 knots, nose up. Once airborne it changes to departure by itself. Your first flight is away.', done: (L) => { const a = ac(L); return !a || a.altitude > 400 }, when: (L) => { const a = ac(L); return !a || a.phase === 'takeoff' || a.altitude > 0 } },
+    ],
+  },
 ]
+/** An arrival on short final, `m` metres before the threshold on the glide path at approach speed: close enough that
+ *  the camera (held to the airport) shows it in the air, frozen, with the runway right ahead. */
+const SHORT_FINAL_M = 650
+function shortFinal(e: SimEngine, cs: string, runway: string, m: number): AircraftState {
+  // established on the ILS a couple of miles out, then flown in (before the player sees it) to `m` from the threshold
+  const a = arrivalOnFinal(e, cs, runway, 2.2, 'A321', 'tower'); const t = thr(e, runway); e.awaitClearance(a)
+  fastForward(e, () => Math.hypot(a.pos.x - t.x, a.pos.y - t.y) < m || a.phase !== 'landing', 240)
+  return a
+}
 function arrivalOnFrequency(e: SimEngine, cs: string, rwy: string, nm: number): AircraftState { return arrivalOnFinal(e, cs, rwy, nm, 'A321', 'tower') }
 
 // ---------------------------------------------------------------------------------------------------------------------

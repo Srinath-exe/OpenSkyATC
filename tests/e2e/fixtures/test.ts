@@ -1,5 +1,5 @@
 /*
-  Extended Playwright `test` for the SkyControl e2e suite (05-TEST-STRATEGY §1.4, adapted to the code).
+  Extended Playwright `test` for the OpenATC e2e suite (05-TEST-STRATEGY §1.4, adapted to the code).
 
     import { test, expect } from '../fixtures/test';
 

@@ -1,4 +1,4 @@
-/* SKYCONTROL map treatment (01 section 5, A10). Colours come from tokens.css; canvases read them via getComputedStyle. */
+/* OpenATC map treatment (01 section 5, A10). Colours come from tokens.css; canvases read them via getComputedStyle. */
 
 /* Baked satellite imagery: monochrome terrain with a faint green memory */
 .map-satellite { position: relative; filter: var(--map-filter); }

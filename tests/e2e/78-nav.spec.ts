@@ -112,13 +112,13 @@ test.describe('nav bar and shell chrome', () => {
     await page.getByTestId('clock-utc').click();
     await expect(game.clockPopover()).toHaveCount(0);
 
-    await game.hotkey('Space');
+    await game.hotkey('P');   // (Space is speech to text now: pause / resume is P)
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'running');
     await expect(game.pausedPill()).toHaveCount(0);
     expect((await sim.snapshot()).paused).toBe(false);
     await sim.advance(1);
     expect(await sim.time()).toBeCloseTo(t1 + 1, 1);
-    await game.hotkey('Space');
+    await game.hotkey('P');
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'paused');
     await game.togglePause();
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'running');
@@ -382,14 +382,15 @@ test.describe('nav bar and shell chrome', () => {
     await expect(game.helpOverlay()).toHaveAttribute('role', 'dialog');
     await expect(game.helpTab('hotkeys')).toHaveAttribute('aria-selected', 'true');
     await expect(game.helpHotkeyRow('f1')).toBeVisible();
-    await expect(game.helpHotkeyRow('space')).toContainText(/pause/i);
+    await expect(game.helpHotkeyRow('space')).toContainText(/speech to text/i);
+    await expect(game.helpHotkeyRow('pause')).toContainText(/pause/i);
     const total = await game.helpHotkeyRows().count();
     expect(total).toBeGreaterThan(20);
 
     // search filters the rows of the current tab
     await game.helpSearch().fill('pause');
     await expect.poll(() => game.helpHotkeyRows().count()).toBeLessThan(total);
-    await expect(game.helpHotkeyRow('space')).toBeVisible();
+    await expect(game.helpHotkeyRow('pause')).toBeVisible();
     await expect(game.helpHotkeyRow('f1')).toHaveCount(0);
     await game.helpSearch().fill('zzzz-no-such-key');
     await expect(game.helpHotkeyRows()).toHaveCount(0);
@@ -449,7 +450,7 @@ test.describe('nav bar and shell chrome', () => {
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'paused');
     expect((await sim.snapshot()).paused).toBe(true);
     await expect(game.pauseMenu()).toContainText('EGLL');
-    await expect(game.pauseMenu()).toContainText('1 aircraft');
+    await expect(game.pauseMenu()).toContainText(/Traffic\s*1/);
 
     // Resume
     await game.pauseItem('resume').click();
@@ -488,7 +489,7 @@ test.describe('nav bar and shell chrome', () => {
     await expect(game.pauseConfirm('quit')).toBeVisible();
     await game.pauseConfirmYes().click();
     await expect(page.getByTestId('page-home')).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe('/');
+    expect(new URL(page.url()).pathname).toBe('/start');   // home is the start screen
   });
 
   test('settings modal: settings button opens it, toggles apply live to the store, Done closes, "All settings" opens /settings @full', async ({ openGame, sim, page }) => {
@@ -499,6 +500,7 @@ test.describe('nav bar and shell chrome', () => {
     await expect(game.settingsModal()).toBeVisible();
     await expect(game.settingsModal()).toHaveAttribute('role', 'dialog');
 
+    await game.settingsTab('audio');
     const sound = game.settingsToggle('set-sound');
     await expect(sound).toHaveAttribute('aria-checked', 'false');
     await sound.click();
@@ -572,9 +574,9 @@ test.describe('nav bar and shell chrome', () => {
     await page.keyboard.press('Escape');
     await expect(game.cmdInput()).not.toBeFocused();
     await expect(game.pauseMenu()).toHaveCount(0);
-    await page.keyboard.press('Space');
+    await page.keyboard.press('p');
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'paused');
-    await page.keyboard.press('Space');
+    await page.keyboard.press('p');
     await expect(game.pauseBtn()).toHaveAttribute('data-state', 'running');
     await page.keyboard.press('2');
     await expect(game.rateBtn(2)).toHaveAttribute('aria-pressed', 'true');
@@ -714,7 +716,7 @@ test.describe('nav bar and shell chrome', () => {
     await game.brand().click();
     await page.getByTestId('home-leave-confirm-yes').click();
     await expect(page.getByTestId('page-home')).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe('/');
+    expect(new URL(page.url()).pathname).toBe('/start');   // home is the start screen
   });
 
   test('onboarding tips: "Replay" in the settings modal shows tip 1; Next / Enter advance, selecting an aircraft auto-advances, Skip persists the dismissal @full', async ({ openGame, sim, page }) => {
@@ -725,6 +727,7 @@ test.describe('nav bar and shell chrome', () => {
     expect(await page.evaluate(() => localStorage.getItem('skycontrol_onboarding_seen'))).toBe('1');
 
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await page.getByTestId('set-reset-tips').click();
     await expect(game.settingsModal()).toHaveCount(0);
     await expect(page.getByTestId('tip-1')).toBeVisible();
@@ -739,7 +742,7 @@ test.describe('nav bar and shell chrome', () => {
     await expect(page.getByTestId('tip-2')).toBeVisible();
     await expect(page.getByTestId('tip-2')).toHaveAttribute('data-step', '1');
     await expect(page.getByTestId('tip-progress-1')).toHaveAttribute('data-done', 'true');
-    await expect(page.getByTestId('tip-2')).toContainText(/Pushback approved/);
+    await expect(page.getByTestId('tip-2')).toContainText(/pushback approved/i);
     // Next button and Enter (with nothing focused) advance; the help overlay hides the tip while open
     await page.getByTestId('tip-next').click();
     await expect(page.getByTestId('tip-3')).toBeVisible();
@@ -761,6 +764,7 @@ test.describe('nav bar and shell chrome', () => {
     await expect(page.locator('[data-testid^="tip-"][data-step]')).toHaveCount(0);
     // the last tip's button reads Done and finishes
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await page.getByTestId('set-reset-tips').click();
     await expect(page.getByTestId('tip-1')).toBeVisible();
     for (let i = 0; i < 4; i++) await page.getByTestId('tip-next').click();
@@ -773,6 +777,7 @@ test.describe('nav bar and shell chrome', () => {
   test('Esc with the help overlay open over an onboarding tip closes the overlay and keeps the tip @full', async ({ openGame, page }) => {
     const game = await openGame({ icao: 'EGLL', spawn: 'none', position: 'ground' });
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await page.getByTestId('set-reset-tips').click();
     await expect(page.getByTestId('tip-1')).toBeVisible();
     await game.hotkey('?');

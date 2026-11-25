@@ -1,0 +1,6 @@
+{
+  "s1": { "title": "Command model", "what": "Understands what you mean", "dir": "/models/s1/2m-free-v5", "version": "2m-free-v5", "aliases": [], "files": ["model.json", "model.bin"],
+          "notes": ["Understands more ways of saying a command", "Fewer wrong commands"] },
+  "stt": { "title": "Speech model", "what": "Hears your voice", "dir": "/models/stt/parakeet-110m-atc-v1", "version": "2026-11-11", "aliases": ["v1"], "phone": "parakeet-110m-atc-v1",
+           "notes": ["Trained on air traffic control radio"] }
+}

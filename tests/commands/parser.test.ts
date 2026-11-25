@@ -377,6 +377,11 @@ const CASES: Array<[string, Expect, Partial<typeof ctx>?]> = [
   ['DLH2 hold at ZZZZ', { error: 'unknown_fix' }],
   ['DLH2 cleared ILS 18L', { error: 'unknown_runway' }],
   ['DLH2 cleared for the option', { error: 'unsupported' }],
+  // cut off in the middle: never a clearance
+  ['EZY99 runway 27R cleared for', { error: 'missing_param' }],
+  ['EZY99 cleared for takeoff runway', { error: 'missing_param' }],
+  ['DLH2 cleared ILS approach runway', { error: 'missing_param' }],
+  ['DLH2 cleared to land runway', { error: 'missing_param' }],
   ['DLH2 cleared RNAV 27L', { error: 'unsupported' }],
   ['DLH2 descend via STAR', { error: 'unsupported' }],
   ['AFR1170 give way to', { error: 'missing_param' }],

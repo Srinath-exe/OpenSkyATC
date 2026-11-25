@@ -7,6 +7,7 @@
 */
 import * as React from 'react';
 import * as THREE from 'three';
+import { applyLights, dressCabin, isCargo, lightMaterial, lightsForPhase, makeLights, planToOn, setLightPositions, type LightSpec as LSpec } from '@/components/atc/aircraftLights';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
@@ -54,7 +55,7 @@ const GRADE = {
 };
 
 interface Cam { target: THREE.Vector3; dist: number; yaw: number; pitch: number; distGoal: number }
-interface Marker { mesh: THREE.Mesh; id: number; label: HTMLDivElement; shadow: THREE.Mesh; stem: THREE.Line; model: THREE.Group | null; modelWanted: boolean; tinted: string; lights: THREE.Points; lightSpec: LightSpec | null; sm: Smooth | null }
+interface Marker { mesh: THREE.Mesh; id: number; cs: string; label: HTMLDivElement; shadow: THREE.Mesh; stem: THREE.Line; model: THREE.Group | null; modelWanted: boolean; tinted: string; lights: THREE.Points; lightSpec: LightSpec | null; sm: Smooth | null }
 /** Rendered state, eased toward the sim state: the sim steps at 30 Hz, the picture at the display's rate, so every
  *  quantity the eye tracks (position, height, heading, attitude) is filtered with a short time constant instead of
  *  stepping. Sim x/y (metres, north = +y) and altitude (m); heading / pitch / bank in degrees. */
@@ -78,35 +79,13 @@ function aircraftGeometry(): THREE.BufferGeometry {
   return g;
 }
 
-/** Aircraft lights: additive glowing points with a per-point size in pixels (nav / beacon / strobe / landing / taxi). */
-const LIGHT_ORDER = ['tipL', 'tipR', 'tail', 'beaconTop', 'beaconBot', 'nose', 'landL', 'landR'] as const;
-const lightMaterial = new THREE.ShaderMaterial({
-  uniforms: { uOpacity: { value: 1 }, uPixelRatio: { value: 1 } },
-  vertexShader: `attribute float size; attribute vec3 color; varying vec3 vColor; uniform float uPixelRatio;
-    void main() { vColor = color; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_PointSize = size * uPixelRatio; gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `varying vec3 vColor; uniform float uOpacity;
-    void main() { float d = length(gl_PointCoord - 0.5) * 2.0; float a = smoothstep(1.0, 0.0, d); float core = 1.0 - smoothstep(0.0, 0.32, d); gl_FragColor = vec4(vColor + vec3(0.5) * core, (a * a * 0.7 + core) * uOpacity); }`,
-  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-});
-function makeLights(): THREE.Points {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(LIGHT_ORDER.length * 3), 3));
-  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(LIGHT_ORDER.length * 3), 3));
-  g.setAttribute('size', new THREE.BufferAttribute(new Float32Array(LIGHT_ORDER.length), 1));
-  const p = new THREE.Points(g, lightMaterial); p.frustumCulled = false; p.renderOrder = 30;
-  return p;
-}
-function setLightPositions(p: THREE.Points, spec: LightSpec): void {
-  const arr = p.geometry.getAttribute('position').array as Float32Array;
-  LIGHT_ORDER.forEach((k, i) => { const v = spec[k]; arr[i * 3] = v.x; arr[i * 3 + 1] = v.y; arr[i * 3 + 2] = v.z; });
-  p.geometry.getAttribute('position').needsUpdate = true;
-}
+// aircraft lights: src/components/atc/aircraftLights.ts (shared with the hangar, where they are tuned)
 
 export function WorldMap({ standalone = false }: { standalone?: boolean }) {
   const host = React.useRef<HTMLDivElement>(null);
   const labels = React.useRef<HTMLDivElement>(null);
   const icao = useSim((s) => s.icao);
-  const hasEngine = useSim((s) => !!s.engine);
+  const hasEngine = useSim((s) => !!s.engine); const naming = useSim((s) => s.engine?.naming);
   const [status, setStatus] = React.useState<'loading' | 'ready' | 'error'>('loading');
   const [tip, setTip] = React.useState<{ lines: string[] } | null>(null);
   const tipEl = React.useRef<HTMLDivElement>(null); const tipKey = React.useRef('');
@@ -485,6 +464,8 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
       for (const a of eng.aircraft) {
         live.add(a.id);
         let m = markers.get(a.id);
+        // numbers start again with a new shift: a marker belongs to its flight, not to whoever had the number before
+        if (m && m.cs !== a.callsign) { traffic.remove(m.mesh); if (m.model) traffic.remove(m.model); traffic.remove(m.lights); m.lights.geometry.dispose(); decor.remove(m.shadow); decor.remove(m.stem); m.label.remove(); markers.delete(a.id); m = undefined; }
         if (!m) {
           const mesh = new THREE.Mesh(acGeo, matPlane); mesh.userData.id = a.id;
           const label = document.createElement('div'); label.className = styles.label; labels.current?.appendChild(label);
@@ -492,7 +473,7 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
           const stem = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 1, 0)]), stemMat); decor.add(stem);
           const lights = makeLights(); setLightPositions(lights, genericLights(a.perf.lengthMeters, a.perf.wingspanMeters)); traffic.add(lights);
           mesh.rotation.order = 'YXZ';
-          m = { mesh, id: a.id, label, shadow, stem, model: null, modelWanted: false, tinted: '', lights, lightSpec: null, sm: null }; markers.set(a.id, m); traffic.add(mesh);
+          m = { mesh, id: a.id, cs: a.callsign, label, shadow, stem, model: null, modelWanted: false, tinted: '', lights, lightSpec: null, sm: null }; markers.set(a.id, m); traffic.add(mesh);
         }
         const air = isAirborne(a);
         // eased picture state (snap on the first frame and after a jump such as a respawn)
@@ -531,10 +512,15 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         // real model (lazy per type); the silhouette stays as the far-zoom symbol and the pick target
         if (!m.modelWanted) {
           m.modelWanted = true; const mk = m;
-          loadAircraftModel(a.perf.icaoCode).then((mdl) => {
-            if (!mdl || disposed || !markers.has(mk.id)) return;
+          loadAircraftModel(a.perf.icaoCode, a.callsign).then((mdl) => {
+            if (!mdl || disposed || markers.get(mk.id) !== mk) return;   // gone, or its number now belongs to another aircraft
             mk.model = instantiate(mdl, a.perf.lengthMeters, a.callsign); mk.model.userData.id = mk.id; mk.model.rotation.order = 'YXZ'; traffic.add(mk.model);
-            const spec = lightsOf(mdl, a.perf.lengthMeters); if (spec) { mk.lightSpec = spec; setLightPositions(mk.lights, spec); }
+            // light positions measured on the model itself (aircraftLights.ts, the hangar's), once per template, in
+            // the instance's unit frame, then scaled to this aircraft's length
+            let unit: LSpec | undefined
+            try { const cab = dressCabin(mk.model, a.perf.icaoCode, a.perf.lengthMeters, isCargo(a.perf.icaoCode, a.callsign)); unit = cab.spec; mk.model.userData.cab = cab } catch { unit = undefined }
+            const spec = unit ? (Object.fromEntries(Object.entries(unit).map(([k, v]) => [k, (v as THREE.Vector3).clone().multiplyScalar(a.perf.lengthMeters)])) as unknown as LSpec) : lightsOf(mdl, a.perf.lengthMeters)
+            if (spec) { mk.lightSpec = spec as LightSpec; setLightPositions(mk.lights, spec as LSpec); }
           });
         }
         m.mesh.visible = onScreen && !useModel; m.shadow.visible = onScreen; m.stem.visible = onScreen && air;
@@ -549,23 +535,13 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         // on the runway and in the air, landing lights below 10 000 ft / on the roll, taxi light while moving on the ground
         {
           const L = m.lights; L.position.copy(org); L.rotation.order = 'YXZ'; L.rotation.set(pitch, yaw, bank);
-          const col = L.geometry.getAttribute('color').array as Float32Array, siz = L.geometry.getAttribute('size').array as Float32Array;
-          const ph = a.phase; const t = clock.elapsedTime + a.id * 0.37;
-          const active = ph !== 'parked' && ph !== 'arrived' && ph !== 'departed';
-          const onRunway = ph === 'lineup' || ph === 'takeoff' || ph === 'landing' || ph === 'rollout';
-          const beacon = active && (t % 1.2) < 0.32;
-          const strobe = (air || onRunway) && ((t % 1.35) < 0.07 || ((t % 1.35) > 0.16 && (t % 1.35) < 0.23));
-          const landing = onRunway || (air && a.altitude < 10000);
-          const taxi = !air && active && a.speed > 0.5;
+          const t = clock.elapsedTime + a.id * 0.37;
+          const plan = lightsForPhase({ phase: a.phase, kind: a.plan?.kind, altitude: a.altitude, speed: a.speed });
           // sizes in px (halo included): visible from a distance at night, faint by day
           const nightK = 0.4 + 0.6 * nightAmtRef;
-          const set = (i: number, r: number, g: number, b: number, sz: number) => { col[i * 3] = r; col[i * 3 + 1] = g; col[i * 3 + 2] = b; siz[i] = sz * nightK; };
-          const nav = active ? 1 : 0;
-          set(0, 1, 0.12, 0.1, strobe ? 34 : 14 * nav); set(1, 0.2, 1, 0.3, strobe ? 34 : 14 * nav); set(2, 1, 1, 1, strobe ? 24 : 11 * nav);
-          set(3, 1, 0.15, 0.1, beacon ? 20 : 0); set(4, 1, 0.15, 0.1, beacon ? 16 : 0);
-          set(5, 1, 0.97, 0.9, taxi ? 18 : 0); set(6, 1, 0.98, 0.92, landing ? 26 : 0); set(7, 1, 0.98, 0.92, landing ? 26 : 0);
-          L.geometry.getAttribute('color').needsUpdate = true; L.geometry.getAttribute('size').needsUpdate = true;
-          L.visible = onScreen && (active || air);
+          applyLights(L, planToOn(plan), t, nightK);
+          const cab = m.model?.userData.cab as { set: (l: number) => void } | undefined; if (cab) cab.set(Math.max(0, Math.min(1, (nightAmtRef - 0.05) / 0.4)) * plan.cabin);
+          L.visible = onScreen && a.phase !== 'departed';
         }
         // label
         tmp.copy(m.mesh.position).project(camera);
@@ -621,8 +597,8 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         const useModel = !!m.model && near;
         if (!m.modelWanted && near && modelBudget > 0) {
           m.modelWanted = true; modelBudget--; const mk = m;
-          loadAircraftModel(p.type).then((mdl) => {
-            if (!mdl || disposed || !parkedMarkers.has(p.id)) return;
+          loadAircraftModel(p.type, p.callsign).then((mdl) => {
+            if (!mdl || disposed || parkedMarkers.get(p.id) !== mk) return;
             mk.model = instantiate(mdl, perf.lengthMeters, p.callsign); mk.model.position.copy(mk.pos); mk.model.rotation.y = mk.rotY; traffic.add(mk.model);
           });
         }
@@ -745,7 +721,7 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         terrainUniforms.uSunI.value = L.sunIntensity * cloudDim; terrainUniforms.uHemiI.value = L.hemiIntensity; terrainUniforms.uDay.value = L.day; terrainUniforms.uWet.value = wxS.wet;
       }
       if (fly) {   // the tutorial's camera flight: eased in and out, the distance on a log scale so a big zoom feels even
-        const k = Math.min(1, (now - fly.t0) / fly.ms); const q = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+        const k = Math.max(0, Math.min(1, (now - fly.t0) / fly.ms)); const q = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
         const A = fly.from, B = fly.to;
         cam.target.x = A.x + (B.x - A.x) * q; cam.target.z = A.z + (B.z - A.z) * q; cam.target.y = world?.heightAt(cam.target.x, -cam.target.z) ?? cam.target.y;
         cam.dist = cam.distGoal = Math.exp(Math.log(A.dist) + (Math.log(B.dist) - Math.log(A.dist)) * q); cam.yaw = A.yaw + (B.yaw - A.yaw) * q; cam.pitch = A.pitch + (B.pitch - A.pitch) * q;
@@ -806,7 +782,7 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
       for (const pass of composer.passes) pass.dispose(); composer.dispose(); rt.dispose(); renderer.dispose(); renderer.forceContextLoss();
       if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
     };
-  }, [icao, hasEngine]);
+  }, [icao, hasEngine, naming]);
 
   return (
     <div className={styles.root} data-testid="world-map" data-status={status} data-standalone={standalone ? 'true' : 'false'}>

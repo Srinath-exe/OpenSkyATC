@@ -48,7 +48,7 @@ test.describe('edge LLM', () => {
     expect(seen.bodies).toHaveLength(1);
     const [sys, user] = seen.bodies[0].messages;
     expect(sys.role).toBe('system'); expect(sys.content).toContain('POSITION: GROUND');
-    expect(user.content).toMatch(/^SKYCONTROL KSFO · you are GROUND/);
+    expect(user.content).toMatch(/^OpenATC KSFO · you are GROUND/);
     expect(user.content).toMatch(/^REQUESTS ON GROUND \(1\)/m);
     expect(user.content).toMatch(/^- AFR851: ".*request pushback.*" \(\d+s\) · answers: PUSHBACK APPROVED \| STANDBY \| UNABLE/m);
     expect(user.content).toMatch(/^- AFR851 B752\/M DEP · Parked at stand.*· can: PUSHBACK APPROVED/m);
@@ -107,6 +107,7 @@ test.describe('edge LLM', () => {
     browserConsole.allow(/api\/llm\/chat/);
     await openGame(APP);
     await game.settingsBtn().click();
+    await game.settingsTab('models');
     const section = page.getByTestId('llm-section');
     await expect(section).toBeVisible();
     await page.getByTestId('llm-mode-advise').click();

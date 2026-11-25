@@ -15,6 +15,7 @@ import { usePersistedState } from '../hooks/usePersistedState'
 import { LS, readJson, writeJson, EV_VOICE_ENGINE } from '../persist'
 import { isSilent, fromEngine } from '@/lib/sim/dispatch'
 import { parseCommand } from '@/lib/sim/commands'
+import { applyFix, explainCall, type Fault } from '@/lib/sim/explain'
 import { describe } from '@/lib/sim/commandAst'
 import { createBrowserRecognizer, createLocalRecognizer, browserSpeechAvailable, localSpeechAvailable, DEFAULT_VOICE_ENGINE, createNativeRecognizer, nativeSpeechAvailable, defaultAccent } from '@/lib/voice/recognizer'
 import type { Recognizer, VoiceEngine } from '@/lib/voice/recognizer'
@@ -23,7 +24,11 @@ import { diagKey, noteAttempt, saveAttempt } from '@/lib/voice/asr-diag'
 import { understandHeard, biasNames } from '@/lib/voice/asr-nbest'
 import { L1Client } from '@/lib/voice/l1'
 import { voiceContext, positionOf } from '@/lib/voice/context'
+import { liveRead, liveRoute } from '@/lib/voice/live'
+import { setLiveCall } from '@/game/TaxiMap/feed'
+import { sendCue, TUTOR_EVENT } from '@/components/atc/WorldMap/tutor'
 import type { Position as FreqPosition } from '@/lib/sim/types'
+import { keyLabel, useKey } from '../keybindings'
 
 /** One filter per job: TOWER = ground + tower frequencies, APPROACH = approach + departure. */
 type Filter = 'twr' | 'app' | 'all'
@@ -154,6 +159,7 @@ function lastTokenRange(text: string): { start: number; end: number } {
 
 export function CommLog() {
   const shell = useShell()
+  const talk = keyLabel(useKey('ptt'))
   const reduced = usePrefersReducedMotion()
   const position = useSim((s) => s.position)
   const radio = useSim((s) => s.radio)
@@ -205,7 +211,7 @@ export function CommLog() {
   const [value, setValue] = React.useState('')
   const [focused, setFocused] = React.useState(false)
   const [active, setActive] = React.useState(-1)
-  const [error, setError] = React.useState<{ text: string; token: string | null } | null>(null)
+  const [error, setError] = React.useState<{ text: string; token: string | null; faults?: Fault[]; heard?: string; was?: string } | null>(null)
   const [review, setReview] = React.useState<string | null>(null)
   const [shakeKey, setShakeKey] = React.useState(0)
   const [acceptKey, setAcceptKey] = React.useState(0)
@@ -255,6 +261,11 @@ export function CommLog() {
     setHistoryIdx(-1)
   }
 
+  /** What exactly is wrong with a call that did not work, part by part (explain.ts). */
+  const why = (text: string, r: { code?: string; reason?: string | null }): Fault[] => {
+    const e = sim.engine; if (!e || sim.testMode) return []
+    try { return explainCall(text, fromEngine(e, { lastCallsign: sim.lastCallsign, position: sim.position }), e, r) } catch { return [] }
+  }
   /** Transmit the command line (or `override`, e.g. a spoken command): review step first when "typed = instant" is off. */
   const send = (override?: string) => {
     const text = (override ?? value).trim()
@@ -267,20 +278,21 @@ export function CommLog() {
       const p = parseCommand(text, fromEngine(e, { lastCallsign: sim.lastCallsign, position: sim.position }))
       if (p.ok && p.ast) { setReview(describe(p.ast)); setError(null); if (override != null) focus(); return }
       const err = p.errors[0]
-      setError({ text: err?.message ?? 'Unable to parse', token: err?.token ?? null })
+      setError({ text: err?.message ?? 'Unable to parse', token: err?.token ?? null, faults: why(text, { code: err?.code, reason: err?.message }) })
       setShakeKey((k) => k + 1)
       return
     }
     const r = sim.command(text)
     setReview(null)
+    const faults = r.ok ? [] : why(text, r)
     if (!r.ok && isSilent(r.code)) {
-      setError({ text: r.reason ?? r.code, token: null })
+      setError({ text: r.reason ?? r.code, token: null, faults })
       setShakeKey((k) => k + 1)
       return
     }
     pushHistory(text)
     setValue('')
-    setError(null)
+    setError(faults.length ? { text: r.reason ?? r.code, token: null, faults, was: text } : null)
     setAcceptKey((k) => k + 1)
   }
 
@@ -346,6 +358,7 @@ export function CommLog() {
   const sendRef = React.useRef(send); sendRef.current = send
   // in-browser voice model (L1): created on the first push-to-talk; the game state is prefilled while the player talks
   const l1Ref = React.useRef<L1Client | null>(null)
+  React.useEffect(() => { const drop = () => { l1Ref.current?.dispose(); l1Ref.current = null }; window.addEventListener('skycontrol-s1-changed', drop); return () => window.removeEventListener('skycontrol-s1-changed', drop) }, [])
   const stateRef = React.useRef<{ text: string; callsigns: string[] } | null>(null)
   React.useEffect(() => {
     if (!shell.ptt || !voiceAvail) return
@@ -355,13 +368,15 @@ export function CommLog() {
     try {
       const eng = sim.engine
       if (eng) {
-        l1Ref.current = l1Ref.current ?? new L1Client()
+        l1Ref.current = l1Ref.current ?? new L1Client()   // (a model update drops it: the next call loads the new one)
         stateRef.current = voiceContext(eng, positionOf(sim.position) ?? 'tower')
         l1Ref.current.prefill(stateRef.current.text)
         rec.setHints?.(biasNames(stateRef.current))   // the callsigns on frequency bias the recogniser
       }
     } catch { /* the rules path still works without the model */ }
     rec.onPartial = setHeard
+    // the live transcript goes into the command line as a call, word by word (the map previews it from there)
+    rec.onLive = (t) => { const e = sim.engine; if (!e || !t.trim()) return; try { setValue(liveRead(t, e, true).line) } catch { setValue(t) } setError(null) }
     rec.onError = (m) => setError({ text: m, token: null })
     rec.start()
     return () => {   // PTT released
@@ -401,12 +416,64 @@ export function CommLog() {
             if (!u) return
             if (u.ok) { sendRef.current(u.line); return }
             focus(u.line)
-            setError({ text: u.source === 'L1' ? (u.error ?? 'Not understood') : `Heard “${u.transcript}”: ${u.error}`, token: null })
+            setError({ text: u.source === 'L1' ? (u.error ?? 'Not understood') : `Heard “${u.transcript}”: ${u.error}`, token: null, faults: why(u.line || u.transcript, { reason: u.error }), heard: u.transcript })
             setShakeKey((k) => k + 1)
           })
       })
     }
   }, [shell.ptt, voiceAvail, focus, recognizerFor])
+
+  // the call as it is made (typed, or the live transcript): the aircraft called is picked, a runway named is lit, and a
+  // taxi clearance is drawn on the map as far as its taxiways have been named (the rest of the way dimmer)
+  const livePicked = React.useRef<number | null>(null)
+  const liveDrawn = React.useRef(new Map<string, string>())
+  React.useEffect(() => { const f = (ev: Event) => { const c = (ev as CustomEvent<{ kind: string; id?: string }>).detail; if (c?.kind === 'clear' && !c.id) liveDrawn.current.clear() }; window.addEventListener(TUTOR_EVENT, f); return () => window.removeEventListener(TUTOR_EVENT, f) }, [])
+  React.useEffect(() => {
+    // only what changed goes to the map (a route sent again would sweep on again)
+    const put = (id: string, pts: Array<{ x: number; y: number }> | null, color = '') => {
+      const key = pts && pts.length > 1 ? `${color}|${pts.length}|${pts[pts.length - 1].x.toFixed(1)},${pts[pts.length - 1].y.toFixed(1)}|${pts[0].x.toFixed(1)}` : ''
+      if ((liveDrawn.current.get(id) ?? '') === key) return
+      liveDrawn.current.set(id, key)
+      sendCue(key ? { kind: 'route', id, pts: pts!, legs: [], color } : { kind: 'clear', id })
+    }
+    const t = window.setTimeout(() => {
+      const e = sim.engine
+      const clear = () => { setLiveCall(null); put('live-a', null); put('live-b', null); put('live-rw', null) }
+      if (!e || !value.trim()) { clear(); livePicked.current = null; return }
+      let r: ReturnType<typeof liveRead>
+      try { r = liveRead(value, e, false) } catch { clear(); return }
+      const a = r.aircraft
+      if (a && livePicked.current !== a.id) {
+        livePicked.current = a.id
+        if (sim.selectedId !== a.id) sim.select(a.id)
+        // the aircraft called is brought into view when it is off the screen
+        const p = sim.screenPos(a.id)
+        if (!p || p.x < 40 || p.y < 40 || p.x > window.innerWidth - 40 || p.y > window.innerHeight - 140) sim.centerOn(a.id)
+      }
+      const route = a && r.taxi ? liveRoute(e, a, r.taxi) : null
+      setLiveCall({ id: a?.id ?? null, line: value, via: r.taxi?.via ?? [], runways: r.runways, pts: route?.pts ?? [], cum: route?.cum ?? [], named: route?.named ?? 0 })   // the taxi map's window draws it too
+      if (route && route.pts.length > 1) {
+        const upTo = (s0: number, s1: number) => {
+          const out: Array<{ x: number; y: number }> = []
+          for (let i = 0; i < route.pts.length - 1; i++) {
+            const c0 = route.cum[i], c1 = route.cum[i + 1]; if (c1 < s0 || c0 > s1) continue
+            const at = (s: number) => { const k = (s - c0) / ((c1 - c0) || 1); return { x: route.pts[i].x + (route.pts[i + 1].x - route.pts[i].x) * k, y: route.pts[i].y + (route.pts[i + 1].y - route.pts[i].y) * k } }
+            if (!out.length) out.push(at(Math.max(s0, c0)))
+            out.push(at(Math.min(s1, c1)))
+          }
+          return out
+        }
+        const named = route.named > 2 ? upTo(0, route.named) : [], rest = route.total - route.named > 2 ? upTo(route.named, route.total) : []
+        put('live-a', named, '#3be0ff'); put('live-b', rest, 'rgba(59,224,255,0.35)')
+      } else { put('live-a', null); put('live-b', null) }
+      // a runway named (not a taxi destination: that one is the route's end)
+      const rw = r.runways.find((x) => x !== (r.taxi?.dest?.kind === 'runway' ? r.taxi.dest.runway : ''))
+      const ends = rw ? e.runwayByEnd(rw) : null
+      const p0 = ends ? e.nodeXY(ends.end.nodeId) : null, p1 = ends ? e.nodeXY(ends.other.nodeId) : null
+      put('live-rw', p0 && p1 ? [p0, p1] : null, '#ffd34a')
+    }, 60)
+    return () => window.clearTimeout(t)
+  }, [value])
 
   const menuOptions: MenuOption[] = suggestions.map((s, i) => ({ value: `${i}:${s.text}`, label: s.label, description: s.kind, testId: `cmd-autocomplete-${i}` }))
 
@@ -452,7 +519,18 @@ export function CommLog() {
       ) : null}
 
       <footer className={styles.footer}>
-        {error ? <span className={styles.error} role="alert" data-testid="cmd-parse-error">{error.text}{error.token ? <> · <span data-testid="cmd-parse-error-token">{error.token}</span></> : null}</span> : null}
+        {error?.faults?.length ? (
+          <div className={styles.faults} role="alert" data-testid="cmd-faults">
+            {error.heard ? <p className={styles.faultHeard}>Heard: “{error.heard}”</p> : null}
+            {error.faults.map((f, i) => (
+              <div key={i} className={styles.fault}>
+                <p><b>{f.title}</b>{f.bad ? <mark>{f.bad}</mark> : null}</p><span>{f.text}</span>
+                {f.fixes.length ? <div>{f.fixes.map((x) => <button key={x} type="button" onClick={() => { setValue(applyFix(error.was ?? value, f, x)); setError(null); focus() }}>{x}</button>)}</div> : null}
+              </div>
+            ))}
+            <button type="button" className={styles.faultX} aria-label="Close" onClick={() => setError(null)}>×</button>
+          </div>
+        ) : error ? <span className={styles.error} role="alert" data-testid="cmd-parse-error">{error.text}{error.token ? <> · <span data-testid="cmd-parse-error-token">{error.token}</span></> : null}</span> : null}
         {review ? <span className={styles.error} role="status" data-testid="cmd-review">{review} — Enter to transmit, Esc to edit</span> : null}
         {menuOpen ? (
           <Menu
@@ -505,8 +583,8 @@ export function CommLog() {
             className={styles.ptt}
             data-state={shell.ptt ? 'on' : 'off'}
             aria-pressed={shell.ptt}
-            aria-label="Push to talk (hold)"
-            title="Hold to talk · Ctrl+Space"
+            aria-label="Speech to text (hold)"
+            title={`Speech to text: hold ${talk} and talk`}
             onPointerDown={(e) => { e.preventDefault(); shell.setPtt(true) }}
             onPointerUp={() => shell.setPtt(false)}
             onPointerLeave={() => shell.setPtt(false)}
@@ -516,8 +594,8 @@ export function CommLog() {
             data-testid="cmd-ptt"
           >
             <span className={styles.pttDot} aria-hidden="true" />
-            PTT
-            <span className={styles.pttHint}>hold · Ctrl+Space</span>
+            STT
+            <span className={styles.pttHint}>hold {talk}</span>
           </button>
           {shell.ptt ? (
             <span className={styles.transcript} data-testid="cmd-ptt-transcript">

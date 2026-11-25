@@ -22,7 +22,7 @@ for (const icao of ALL_TYPES) {
   console.log(`  ${icao.padEnd(5)} → ${icao}.svg  (${p.modelName})`);
 }
 
-const html = `<!doctype html><meta charset=utf8><title>SkyControl Aircraft Types</title>
+const html = `<!doctype html><meta charset=utf8><title>OpenATC Aircraft Types</title>
 <style>body{background:#070d18;color:#cdddf2;font-family:ui-monospace,monospace;margin:0;padding:24px}
 h1{letter-spacing:3px;font-size:16px;color:#fbbf24}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:18px}
@@ -30,7 +30,7 @@ figure{margin:0;background:rgba(7,13,24,.86);border:1px solid rgba(30,56,96,.55)
 .box{height:90px;display:flex;align-items:center;justify-content:center}
 .box svg{max-width:100%;max-height:90px}
 figcaption{font-size:11px;line-height:1.5;margin-top:8px}figcaption span{color:#5f7da6;font-size:9px}</style>
-<h1>◆ SKYCONTROL — AIRCRAFT TYPES (${ALL_TYPES.length})</h1>
+<h1>◆ OpenATC — AIRCRAFT TYPES (${ALL_TYPES.length})</h1>
 <div class=grid>${cards.join('')}</div>`;
 writeFileSync(join(outDir, 'index.html'), html);
 console.log(`\n✅ ${ALL_TYPES.length} SVGs + gallery → ${outDir}`);

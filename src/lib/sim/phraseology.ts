@@ -232,7 +232,7 @@ export function spokenFix(fix: string): string {
 
 /** Spoken stand / gate ref: "five one two" or "Alpha one two". */
 export function spokenStand(ref: string, variant: V): string {
-  return ref.toUpperCase().split('').map(c => (/\d/.test(c) ? spokenDigits(c, variant) : PHONETIC[c] ?? c)).join(' ');
+  return ref.toUpperCase().replace(/-/g, '').split('').map(c => (/\d/.test(c) ? spokenDigits(c, variant) : PHONETIC[c] ?? c)).join(' ');
 }
 
 /** Spoken taxiway single designator "A1" -> "Alpha one". */
@@ -339,6 +339,8 @@ function taxiPhrase(ast: TaxiAst, ctx: PhraseCtx): string {
   const cross = ast.cross.length ? `, cross runway${ast.cross.length > 1 ? 's' : ''} ${ast.cross.map(r => spokenRunway(r, v)).join(' and ')}` : '';
   const hs = ast.holdShortOf ? `, ${holdTargetPhrase(ast.holdShortOf, v)}` : '';
   const xp = ast.expedite ? ', expedite' : '';
+  // one step of a step-by-step clearance: where it ends is the limit, the destination is not said
+  if (ast.limit) return [via ? `taxi via ${via}` : ast.cross.length ? '' : 'taxi', ast.cross.length ? `cross runway${ast.cross.length > 1 ? 's' : ''} ${ast.cross.map(r => spokenRunway(r, v)).join(' and ')}` : '', ast.limit === 'crossed' ? 'hold position when across' : ast.holdShortOf ? holdTargetPhrase(ast.holdShortOf, v) : ''].filter(Boolean).join(', ') + xp;
   switch (ast.dest.kind) {
     case 'runway': {
       const rwy = spokenRunway(ast.dest.runway, v);
@@ -356,6 +358,7 @@ function taxiReadback(ast: TaxiAst, ctx: PhraseCtx): string {
   const cross = ast.cross.length ? `, cross ${ast.cross.map(r => spokenRunway(r, v)).join(' and ')}` : '';
   const hs = ast.holdShortOf ? `, ${holdTargetPhrase(ast.holdShortOf, v, true)}` : '';
   const xp = ast.expedite ? ', expediting' : '';
+  if (ast.limit) return [via.trim(), ast.cross.length ? `cross ${ast.cross.map(r => spokenRunway(r, v)).join(' and ')}` : '', ast.limit === 'crossed' ? 'holding when across, will call you' : ast.holdShortOf ? `${holdTargetPhrase(ast.holdShortOf, v, true)}, will call you` : ''].filter(Boolean).join(', ') + xp;
   switch (ast.dest.kind) {
     case 'runway': {
       const rwy = spokenRunway(ast.dest.runway, v);
@@ -492,6 +495,7 @@ function reportItemPhrase(item: ReportKind): string {
     case 'readyou5': return 'read you five';
     case 'four_mile_final': return 'report four mile final';
     case 'rolling': return 'report rolling';
+    case 'ride': return 'say ride';
   }
 }
 function reportItemReadback(item: ReportKind, ctx: PhraseCtx): string {
@@ -514,6 +518,7 @@ function reportItemReadback(item: ReportKind, ctx: PhraseCtx): string {
     case 'readyou5': return 'read you five';
     case 'four_mile_final': return 'wilco';
     case 'rolling': return 'wilco';
+    case 'ride': return 'ride report';
   }
 }
 
@@ -647,7 +652,7 @@ function txCore(ast: SingleAircraftCommand | SystemCommand, ctx: PhraseCtx): str
     case 'standby': return 'standby';
     case 'unable': return ast.reason === 'standby' ? 'unable, standby' : ast.reason === 'delay' ? 'expect delay, standby' : `unable, ${unableReasonWord(ast.reason)}, standby`;
     case 'report': return ast.items.length ? ast.items.map(reportItemPhrase).join(', ') : 'report position';
-    case 'roger': return 'roger';
+    case 'roger': return ast.yes ? 'approved' : 'roger';
     case 'emergencyAck': {
       const a = ctx.aircraft;
       const level = a?.emergency?.level === 'PAN' ? 'PAN PAN' : 'MAYDAY';

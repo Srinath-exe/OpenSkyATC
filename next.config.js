@@ -1,6 +1,12 @@
+// the commit a report or a crash came from
+let build = process.env.SKYCONTROL_BUILD || ''
+if (!build) try { const git = (a) => require('child_process').execSync(`git ${a}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); build = git('rev-parse --short HEAD') + (git('status --porcelain -uno --ignore-submodules') ? '+' : '') } catch { build = 'dev' /* not a checkout */ }
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
+  distDir: process.env.NEXT_DIST || '.next',   // a trial build beside the one the live server runs from
+  env: { NEXT_PUBLIC_BUILD: build },
   allowedDevOrigins: ['localhost'],
   poweredByHeader: false,
   // /api/voice/stt runs Whisper on onnxruntime-node, which transformers.js loads through createRequire: the file tracer
@@ -31,7 +37,7 @@ const nextConfig = {
   // /api/voice/gold reads and writes ml/data/gold of the checkout at run time (outside the bundle); without this the
   // tracer copies all of ml/ (datasets, checkpoints) and mobile/ (Flutter build) into .next/standalone (~5 GB).
   outputFileTracingExcludes: {
-    '*': ['./ml/**', './mobile/**'],
+    '*': ['./ml/**', './mobile/**', './data/**', './film/**', './video/**', './refrence/**', './docs/**', './tests/**', './test-results/**', './playwright-report/**', './cache/**', './context/**', './public/**', './.scratch*/**', './.tmp/**', './.impeccable/**', './*.mp4'],
   },
   // The baked worlds and the aircraft models are large and immutable per version (their URLs carry ?v=): cache them for
   // a year so a returning player downloads nothing but the page. Everything else keeps Next's revalidation defaults.
@@ -39,6 +45,9 @@ const nextConfig = {
     return [
       { source: '/world/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
       { source: '/models/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
+      // the landing film's frames, video pieces and tracks (fetched with ?v=ASSET_V)
+      { source: '/landing/sfo/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
+      { source: '/landing/sfo-p/:path*', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] },
     ]
   },
 }

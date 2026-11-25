@@ -205,6 +205,9 @@ test.describe('ground map', () => {
 
     // click: the vehicle is selected (store flag + engine flag), any aircraft selection is dropped
     await game.selectStrip('BAW8');
+    // (selecting an aircraft frames it: bring the truck back on screen and click where it is now)
+    await sim.setCamera({ x: v!.pos.x, y: v!.pos.y, zoom: 16 });
+    await expect.poll(async () => { p = await sim.vehicleScreenPos('FOLLOW1'); return inside(p, b, 10); }).toBe(true);
     await game.groundMap().click({ position: p! });
     await expect.poll(() => selectedVehicle(game)).toBe('FOLLOW1');
     expect((await sim.vehicle('FOLLOW1'))?.selected).toBe(true);
@@ -394,6 +397,7 @@ test.describe('ground map', () => {
     await game.groundMap().click({ position: after });
     await expect(game.strip('BAW8')).toHaveAttribute('data-selected', 'true');
     await game.settingsBtn().click();
+    await game.settingsTab('graphics');
     await expect(game.settingsModal().getByTestId('set-theme-chart')).toHaveAttribute('aria-pressed', 'true');
     await game.settingsModal().getByTestId('set-theme-satellite').click();
     await expect(page.getByTestId('ground-view')).toHaveAttribute('data-theme', 'satellite');

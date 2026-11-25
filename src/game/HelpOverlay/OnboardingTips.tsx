@@ -6,12 +6,13 @@ import { GlassPanel, Button, Kbd } from '@/design'
 import { onboardingSeen, setOnboardingSeen } from '@/components/atc/persist'
 import { sim, useSim } from '../hooks/useSimSelector'
 import { useShell } from '../shellContext'
-import { useLookChosen } from '@/components/atc/WorldMap/cinematic'
+import { keyParts, useKey } from '../keybindings'
 
 export const EV_REPLAY_TIPS = 'atc:replay-tips'
 const STEPS = 5
 
 export function OnboardingTips() {
+  const talk = useKey('ptt'), undoK = useKey('undo'), helpK = useKey('help')
   const shell = useShell()
   const hasEngine = useSim((s) => !!s.engine)
   const testMode = useSim((s) => s.testMode)
@@ -21,7 +22,6 @@ export function OnboardingTips() {
   const firstDep = useSim((s) => s.aircraft().find((a) => a.plan.kind === 'departure')?.callsign ?? null)
   const depRunway = useSim((s) => s.runways().find((r) => r.activeDep)?.name ?? null)
   const delayS = useSim((s) => s.settings.pilotDelayS ?? 3)
-  const lookChosen = useLookChosen()   // the first-run look question comes first
 
   const [visible, setVisible] = React.useState(false)
   const [step, setStep] = React.useState(0)
@@ -30,9 +30,9 @@ export function OnboardingTips() {
   const base = React.useRef({ atc: 0, pilot: 0 })
 
   React.useEffect(() => {
-    if (!hasEngine || testMode || !lookChosen) return
+    if (!hasEngine || testMode) return
     if (!onboardingSeen()) { setVisible(true); setStep(0) }
-  }, [hasEngine, testMode, lookChosen])
+  }, [hasEngine, testMode])
   React.useEffect(() => {
     const replay = () => { setOnboardingSeen(false); setVisible(true); setStep(0) }
     window.addEventListener(EV_REPLAY_TIPS, replay)
@@ -75,11 +75,11 @@ export function OnboardingTips() {
   const cs = firstDep ?? 'the first departure'
   const rwy = depRunway ?? 'the active runway'
   const text: React.ReactNode[] = [
-    <>This is <strong>{cs}</strong> — click it on the map or in the strip bay on the left.</>,
-    <>Only valid actions show in the panel on the right. Press <Kbd>P</Kbd> or click <strong>Pushback approved</strong>, then transmit with <Kbd>Enter</Kbd>.</>,
-    <>Pick the runway when asked — wind favours <strong>{rwy}</strong>. After transmitting you have <strong>{delayS} s</strong> to undo with <Kbd>U</Kbd>.</>,
-    <>Listen for the readback in the comm log below — the clearance box on the strip ticks when it matches.</>,
-    <>Try <Kbd>T</Kbd> to taxi. Tip: type taxiway letters in the command line (<Kbd>/</Kbd> focuses it) and <Kbd>?</Kbd> opens the full help.</>,
+    <>This is <strong>{cs}</strong>. Click it on the map or in the departures list on the left: its card opens on the right.</>,
+    <>Give it a call: hold <Kbd keys={keyParts(talk)} /> and say it, or type it in the call field at the bottom, e.g. <strong>{cs} pushback approved</strong>, then <Kbd>Enter</Kbd>.</>,
+    <>Wind favours <strong>{rwy}</strong>. After a call you have <strong>{delayS} s</strong> to undo it with <Kbd keys={keyParts(undoK)} />.</>,
+    <>The pilot reads it back. The flight's card on the right keeps its whole conversation with you.</>,
+    <>Next, the taxi: <strong>{cs} taxi to runway {rwy} via</strong> the taxiways. <Kbd keys={keyParts(helpK)} /> opens the full help.</>,
   ]
   return (
     <GlassPanel variant="lit" padding="tile" radius="inner" className={styles.tips} role="status" aria-live="polite" data-step={step} data-onboarding="true" testId={`tip-${step + 1}`}>

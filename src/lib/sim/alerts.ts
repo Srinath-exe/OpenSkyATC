@@ -349,6 +349,10 @@ export class AlertEngine {
         if (occ.callsign === user) continue;
         if (occ.kind === 'takeoff' || occ.kind === 'landing' || occ.kind === 'rollout') {
           if (!arrival) continue; // two departures: the engine's runway rule scores it; the incursion is the arrival case
+          // one that has landed and is rolling out has the runway until the next is close in: two miles behind is ordinary spacing
+          // (a departure under way with the arrival still outside a mile is ordinary too)
+          if (occ.kind === 'takeoff' && !(ctx.arrivalOnFinal(r.name, 1) ?? ctx.arrivalOnFinal(r.reciprocal, 1))) continue;
+          if (occ.kind !== 'takeoff' && !(ctx.arrivalOnFinal(r.name, 0.5) ?? ctx.arrivalOnFinal(r.reciprocal, 0.5))) continue;
         }
         const isVehicle = typeof occ.id === 'string';
         const veh = isVehicle ? vehicles.find(v => v.id === occ.id) : null;
@@ -479,7 +483,7 @@ export class AlertEngine {
           { distNM: null, vertFt: null, cpaS: Math.round(a.delay.holdShortWaitS), cpaNM: null, runway: a.holdShortRunway }, 'info');
       }
       const req = a.requests.find(r => r.answeredAt == null && (r.expiresAt == null || r.expiresAt > now));
-      if (req && now - req.at >= ALERT_CONST.requestTimeoutS && req.kind !== 'with_you') {
+      if (req && now - req.at >= ALERT_CONST.requestTimeoutS && req.kind !== 'with_you' && !(a.standbyUntil > now)) {   // (told to standby: answered for now)
         touch('request', [a.callsign], [a.id], 'REQUEST UNANSWERED', `${a.callsign} ${req.kind.replace('_', ' ')} unanswered ${Math.round(now - req.at)} s${req.recalls ? ` (${req.recalls} recalls)` : ''}`,
           { distNM: null, vertFt: null, cpaS: Math.round(now - req.at), cpaNM: null, runway: null }, 'info');
       }

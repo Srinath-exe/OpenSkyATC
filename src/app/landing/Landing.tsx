@@ -1,18 +1,27 @@
 'use client';
 // The landing page: one loop of SFO, rendered offline with raea from the game's own airport data and scrubbed by the
 // scroll. The last frame is the first, so the scroll wraps and the film never ends: radar -> approach -> landing ->
-// taxi in on the controller's route -> across the apron to a 747 pushing back -> its route, spoken -> take-off ->
+// taxi in on the controller's route -> across the apron to an A380 pushing back -> its route, spoken -> take-off ->
 // back up to the radar. HTML on top: data blocks on the traffic (tracks.json, projected with the film's camera),
 // taxiway names on the routes, the chapter copy, a HUD.
 import * as React from 'react';
 import Link from 'next/link';
 import s from './landing.module.css';
+import { RadarLoader } from './RadarLoader';
+import { LogoMark } from '@/design/LogoMark'
 
 const BASE = '/landing/sfo';
-const ASSET_V = '7';
-// frame sizes: l 480 (the first look, every frame, any link), m 960 (phones, slow links), f 1600 (desktop)
-const TIERS = ['', 'l', 'm', 'f'] as const;
-const N = 1440, SUB = 3, FW = 1920, FH = 1080;   // film frames, film frames per story frame, frame size
+/** A portrait screen (phones, tablets held upright) plays the 1080 x 1920 cut. */
+const isPortrait = () => window.innerWidth < window.innerHeight * 0.85;
+const ASSET_V = '13';  // (13: 1080p video only; phones get their own 1080 x 1920 film, /landing/sfo-p)
+// The film reaches the page one of two ways:
+// - video (any browser with WebCodecs): H.264 in pieces of 16 frames (film/tovideo.py), lo 960 first for every frame, then
+//   hi 1600 round the playhead; the device's video decoder unpacks a piece in a few ms, so a fast scroll never waits
+// - images (the fallback): one WebP per frame, l 640 (the first look), m 960 (phones, slow links), f 1600 (desktop)
+interface VIndex { n: number; chunk: number; codec?: string; tiers: Record<string, { w: number; h: number; codec?: string; crop?: number[]; sizes: number[][] }> }
+const FULL = [0, 0, 1, 1];
+const TIERS = ['', 'f'] as const;   // one size: 1080p (1920 x 1080, phones 1080 x 1920)
+const N = 1440, SUB = 3;   // film frames, film frames per story frame, frame size
 // story frames that take more scroll: the outro holds while its ways into the game are on screen
 // scroll per frame: the taxi-in a little quicker (seen from higher up), the outro held longer
 const WARP: [number, number, number][] = [[216, 260, 0.6], [452, 476, 2.6]];
@@ -24,13 +33,13 @@ const SITE = {
   icao: 'KSFO', iata: 'SFO', arr: '28R', dep: '1R', clock: 3 * 3600 + 41 * 60 + 12,
   atis: 'ATIS B · WIND 280/16 · ILS 28R · DEP 1R',
   stats: [[4, 'runways'], [246, 'taxiways'], [295, 'stands'], [177, 'hold-short points']] as [number, string][],
-  approach: ['ASA331 HDG 250 THEN DESCEND 3000', 'SJX12 CLEARED ILS 28R', 'SJX12 CONTACT TOWER'],
-  land: ['Starwalker one-two, wind two-eight-zero at one-six, runway two-eight right, cleared to land.', 'Cleared to land two-eight right, Starwalker one-two.'],
-  push: 'DLH455 PUSHBACK APPROVED',
-  voice: 'DLH455 RWY 1R TAXI VIA M4 M1',
+  approach: ['ASA331 HDG 250 THEN DESCEND 3000', 'DAL40 CLEARED ILS 28R', 'DAL40 CONTACT TOWER'],
+  land: ['Delta four-zero, wind two-eight-zero at one-six, runway two-eight right, cleared to land.', 'Cleared to land two-eight right, Delta four-zero.'],
+  push: 'ETD24 PUSHBACK APPROVED',
+  voice: 'ETD24 RWY 1R TAXI VIA M4 M1',
   gnd: 'GND 121.80',
-  takeoff: ['Lufthansa four-five-five, wind two-eight-zero at one-six, runway one right, cleared for take-off.', 'Cleared for take-off one right, Lufthansa four-five-five.'],
-  strips: [['hero', 'SJX12', 'A359'], ['dep', 'DLH455', 'B744'], ['a1', 'ASA331', 'A320']] as [string, string, string][],
+  takeoff: ['Etihad two-four, wind two-eight-zero at one-six, runway one right, cleared for take-off.', 'Cleared for take-off one right, Etihad two-four.'],
+  strips: [['hero', 'DAL40', 'A359'], ['dep', 'ETD24', 'A388'], ['a1', 'ASA331', 'A320']] as [string, string, string][],
 };
 
 type Row = [number, number, number, number, number, number, number]; // ac index, x, y, ft, kt, phase, px length
@@ -77,6 +86,8 @@ class FilmEngine {
   private decoding = new Set<number>();
   private reqd = new Set<number>();                 // frame * 4 + size, in flight
   private queue: number[] = []; private inflight = 0; private loaded = 0;
+  // the film for this screen's shape: a portrait phone gets the 1080 x 1920 cut (its own camera), the rest 1920 x 1080
+  private base = BASE; private fw = 1920; private fh = 1080; readonly portrait: boolean;
   private screenTier = 3;                           // what the screen can show: 2 on phones, 3 on desktop
   private bw = -1;                                  // measured download rate, bytes/s (-1 until the first frames are in)
   private cur = 0; private target = 0; private last = 0; private raf = 0; private dead = false; private lastScroll = 0;
@@ -92,9 +103,16 @@ class FilmEngine {
   private lastText: Record<string, string> = {};
   private tx: { who: string; words: { el: HTMLElement; f: number; seg: number }[]; box: HTMLElement }[] = [];
   private signAt: Record<string, number> = {};
+  private mode: 'wait' | 'video' | 'image' = 'wait';
+  // video: per size (0 lo, 1 hi) the pieces fetched, those fetching, those whose frames are decoded, and a decoder each
+  private vi: VIndex | null = null; private vbuf: (ArrayBuffer | null)[][] = [[], []]; private vreq = new Set<number>();
+  private vdone: Uint8Array[] = []; private vdec: (VideoDecoder | null)[] = [null, null]; private vbusy = [false, false];
+  private vcfg: VideoDecoderConfig[] = []; private vt: [string, string] = ['lo', 'hi']; private vgen = 0; private vt0 = [0, 0]; private vstalls = 0; private shownI = -1;
 
   constructor(root: HTMLElement) {
     this.root = root;
+    this.portrait = isPortrait();
+    if (this.portrait) { this.base = `${BASE}-p`; this.fw = 1080; this.fh = 1920; }
     this.stage = root.querySelector('[data-stage]') as HTMLElement;
     this.film = root.querySelector('[data-film]') as HTMLElement;
     this.canvas = root.querySelector('canvas') as HTMLCanvasElement;
@@ -116,17 +134,143 @@ class FilmEngine {
     this.resize = this.resize.bind(this); this.onScroll = this.onScroll.bind(this); this.tick = this.tick.bind(this);
     window.addEventListener('resize', this.resize); this.root.addEventListener('scroll', this.onScroll, { passive: true });
     this.resize(); this.onScroll(); this.cur = this.target;
-    fetch(`${BASE}/tracks.json?v=${ASSET_V}`).then((r) => r.json()).then((t: Tracks) => { this.tracks = t; this.makeRouteLabels(t); this.makeTx(t); }).catch(() => {});
+    fetch(`${this.base}/tracks.json?v=${ASSET_V}`).then((r) => r.json()).then((t: Tracks) => { this.tracks = t; this.makeRouteLabels(t); this.makeTx(t); }).catch(() => {});
+    this.startVideo().catch(() => false).then((ok) => { if (!ok && !this.dead) this.startImages(); });
+    this.raf = requestAnimationFrame(this.tick);
+  }
+  private startImages() {
+    this.mode = 'image'; this.root.dataset.feed = 'image'; this.bmps.forEach((b) => b.close()); this.bmps.clear(); this.bmpTier.clear(); this.drawn = -1;
     const seen = new Set<number>();
     for (const st of [32, 16, 8, 4, 2, 1]) for (let i = 0; i < N; i += st) if (!seen.has(i)) { seen.add(i); this.queue.push(i); }
     for (let k = 0; k < 6; k++) this.pump();
-    this.raf = requestAnimationFrame(this.tick);
   }
-  destroy() { this.dead = true; cancelAnimationFrame(this.raf); window.removeEventListener('resize', this.resize); this.root.removeEventListener('scroll', this.onScroll); this.bmps.forEach((b) => b.close()); this.bmps.clear(); }
+  /** The video path, if this browser decodes the film's H.264 (and ?img is not set): true once it is running. */
+  private async startVideo(): Promise<boolean> {
+    if (typeof VideoDecoder === 'undefined' || new URLSearchParams(location.search).has('img')) return false;
+    const vi = (await (await fetch(`${this.base}/v/index.json?v=${ASSET_V}`)).json()) as VIndex;
+    if (vi.n !== N || this.dead) return false;
+    this.vi = vi;
+    if (!(await this.vSetup(this.vPick()))) { this.vi = null; return false; }
+    this.mode = 'video'; this.root.dataset.feed = 'video';
+    for (let k = 0; k < 4; k++) this.vPump();
+    return true;
+  }
+  /** The two versions for this screen, [first look, sharp]: a portrait screen gets the middle of the frame (all it shows),
+   *  a big or dense one the 2560s, the rest the 1920s. */
+  private vPick(): [string, string] { return ['hi', 'hi']; }
+  /** (Re)start the decoders for versions `pair`, dropping everything decoded or fetched for another pair. */
+  private async vSetup(pair: [string, string]): Promise<boolean> {
+    const vi = this.vi!, gen = ++this.vgen;
+    for (const d of this.vdec) try { d?.close(); } catch { /* closed */ }
+    this.vdec = [null, null]; this.vbusy = [false, false];
+    const cfgs: VideoDecoderConfig[] = pair.map((n) => ({ codec: vi.tiers[n].codec ?? vi.codec ?? 'avc1.640028', codedWidth: vi.tiers[n].w, codedHeight: vi.tiers[n].h, optimizeForLatency: true }));
+    for (const cfg of cfgs) if (!(await VideoDecoder.isConfigSupported(cfg)).supported) return false;
+    if (gen !== this.vgen || this.dead) return true;
+    this.vt = pair; this.vcfg = cfgs;
+    const C = Math.ceil(N / vi.chunk);
+    this.vbuf = [new Array(C).fill(null), new Array(C).fill(null)]; this.vdone = [new Uint8Array(C), new Uint8Array(C)];
+    this.bmps.forEach((b) => b.close()); this.bmps.clear(); this.bmpTier.clear(); this.drawn = -1;
+    for (let k = 0; k < 2; k++) {
+      const dec = new VideoDecoder({
+        output: (fr) => {
+          const i = Math.round(fr.timestamp / 1000);
+          createImageBitmap(fr).then((b) => {
+            if (this.dead || gen !== this.vgen || (this.bmpTier.get(i) ?? 0) > k + 1) { b.close(); return; }
+            const old = this.bmps.get(i); this.bmps.set(i, b); this.bmpTier.set(i, k + 1); old?.close();
+            if (this.drawn === i) this.drawn = -1;   // a sharper copy of what is on screen: draw it again
+          }).catch(() => this.videoFailed()).finally(() => fr.close());
+        },
+        error: () => { if (gen === this.vgen) this.videoFailed(); },
+      });
+      dec.configure(cfgs[k]); this.vdec[k] = dec;
+    }
+    return true;
+  }
+  private videoFailed() {
+    if (this.mode !== 'video' || this.dead) return;
+    this.vgen++;
+    for (const d of this.vdec) try { d?.close(); } catch { /* closed */ }
+    this.vdec = [null, null]; this.vi = null; this.startImages();
+  }
+  /** Sharp version worth fetching round the playhead: yes unless the link is measured slow (below ~0.45 MB/s). */
+  private vTarget() { return 0; }   // one version: the first-look slot is the only one
+  /** Next piece to fetch: first-look round the playhead, sharp round it, first-look everywhere (nearest first), sharp
+   *  everywhere. */
+  private vNext(): [number, number] | null {
+    const C = this.vbuf[0].length, c = Math.floor(mod(this.target, 1) * N / this.vi!.chunk), T = this.vTarget();
+    const free = (k: number, j: number) => !this.vbuf[k][j] && !this.vreq.has(j * 2 + k);
+    const near = (r: number) => { const o: number[] = []; for (let d = 0; d <= r; d++) { o.push(mod(c + d, C)); if (d && d <= r / 2) o.push(mod(c - d, C)); } return o; };
+    for (const j of near(4)) if (free(0, j)) return [0, j];
+    if (T) for (const j of near(5)) if (free(1, j)) return [1, j];
+    for (const j of near(C)) if (free(0, j)) return [0, j];
+    if (T) for (const j of near(C)) if (free(1, j)) return [1, j];
+    return null;
+  }
+  private vPump() {
+    if (this.dead || this.mode !== 'video' || this.inflight >= 4) return;
+    const job = this.vNext(); if (!job) return;
+    const [k, j] = job, key = j * 2 + k, t0 = performance.now(), par = ++this.inflight, gen = this.vgen;
+    this.vreq.add(key);
+    fetch(`${this.base}/v/${this.vt[k]}/${pad(j, 3)}.bin?v=${ASSET_V}`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(r.status))).then((b) => {
+      const rate = (b.byteLength * Math.max(1, par)) / (Math.max(1, performance.now() - t0) / 1000);
+      this.bw = this.bw < 0 ? rate : this.bw * 0.85 + rate * 0.15;
+      if (gen !== this.vgen) return;
+      this.vbuf[k][j] = b; if (k === 0) this.loaded += this.vi!.chunk;
+    }).catch(() => {}).finally(() => { if (gen === this.vgen) this.vreq.delete(key); this.inflight--; this.vPump(); });
+  }
+  /** The pieces kept decoded round the playhead, nearest first: this one, the next in the scroll's direction and the one
+   *  behind (phones: ~48 frames of the narrow portrait crop), desktop also the one after next. */
+  private vOrder(dir: number) { return this.screenTier < 3 ? [0, dir, -dir] : [0, dir, 2 * dir, -dir]; }
+  /** Drop decoded frames of pieces outside the window (whole pieces, so a piece is never half there and decoded again). */
+  private vEvict(i0: number, dir: number) {
+    const ch = this.vi!.chunk, C = this.vbuf[0].length, c = Math.floor(i0 / ch);
+    const keep = new Set(this.vOrder(dir).map((d) => mod(c + d, C)));
+    if (this.drawn >= 0) keep.add(Math.floor(this.drawn / ch));
+    for (const [j, b] of this.bmps) {
+      const q = Math.floor(j / ch); if (keep.has(q)) continue;
+      b.close(); this.bmps.delete(j); this.bmpTier.delete(j); this.vdone[0][q] = this.vdone[1][q] = 0;
+    }
+  }
+  /** Decode the pieces round the playhead, one piece at a time per decoder: while the playhead is chasing the scroll
+   *  (`fast`) the first-look version (a quarter of the pixels, unpacked ~3x quicker), else the sharp one when fetched.
+   *  A decoder that has not finished a piece in 3 s is reset; the third time the page falls back to the WebP frames. */
+  private vDecode(i0: number, dir: number, fast: boolean) {
+    const vi = this.vi!, C = this.vbuf[0].length, c = Math.floor(i0 / vi.chunk), now = performance.now();
+    for (let k = 0; k < 2; k++) if (this.vbusy[k] && now - this.vt0[k] > 3000) {
+      if (++this.vstalls >= 3) { this.videoFailed(); return; }
+      try { this.vdec[k]!.reset(); this.vdec[k]!.configure(this.vcfg[k]); } catch { this.videoFailed(); return; }
+      this.vbusy[k] = false; this.vdone[k].fill(0);
+    }
+    const can = (k: number, j: number) => !!this.vbuf[k][j] && !this.vbusy[k] && this.vdec[k]?.state === 'configured';
+    for (const d of this.vOrder(dir)) {
+      const j = mod(c + d, C);
+      let k = -1;
+      if (!this.vdone[0][j] && !this.vdone[1][j]) {
+        const first = fast || !this.vbuf[1][j] ? 0 : 1;
+        k = can(first, j) ? first : can(1 - first, j) ? 1 - first : -1;
+      } else if (!this.vdone[1][j] && !fast && can(1, j)) k = 1;
+      if (k < 0) continue;
+      const dec = this.vdec[k]!, buf = this.vbuf[k][j]!, sizes = vi.tiers[this.vt[k]].sizes[j];
+      let off = 0;
+      sizes.forEach((n, q) => {
+        dec.decode(new EncodedVideoChunk({ type: q ? 'delta' : 'key', timestamp: (j * vi.chunk + q) * 1000, data: new Uint8Array(buf, off, n) }));
+        off += n;
+      });
+      this.vbusy[k] = true; this.vdone[k][j] = 1; this.vt0[k] = now;
+      dec.flush().catch(() => {}).finally(() => { if (this.vt0[k] === now) this.vbusy[k] = false; });
+    }
+  }
+  /** Where bitmap i goes in the frame, as fractions [x, y, w, h] (a portrait crop covers the middle only). */
+  private cropOf(i: number): number[] {
+    if (this.mode !== 'video' || !this.vi) return FULL;
+    return this.vi.tiers[this.vt[(this.bmpTier.get(i) ?? 1) - 1]]?.crop ?? FULL;
+  }
+  destroy() { for (const d of this.vdec) try { d?.close(); } catch { /* closed */ } this.dead = true; cancelAnimationFrame(this.raf); window.removeEventListener('resize', this.resize); this.root.removeEventListener('scroll', this.onScroll); this.bmps.forEach((b) => b.close()); this.bmps.clear(); }
 
   // the taxiway names on the two routes, made once the tracks say which there are
   private makeRouteLabels(t: Tracks) {
     const box = this.els.routeLabels; if (!box) return;
+    box.textContent = '';   // a new engine (the phone turned) builds them again
     for (const key of t.anchors) {
       if (!key.startsWith('H:') && !key.startsWith('D:')) continue;
       const el = document.createElement('div'); el.dataset.anchor = key; el.className = `${s.twy} ${key.startsWith('H:') ? s.twyH : s.twyD}`; el.style.opacity = '0';
@@ -136,6 +280,7 @@ class FilmEngine {
   // the controller's taxi instructions, a word at a time; the taxiways as the yellow-on-black signs they are on the field
   private makeTx(t: Tracks) {
     const box = this.els.txWords; if (!box || !t.instr) return;
+    box.textContent = '';
     for (const I of t.instr) {
       const line = document.createElement('span'); line.className = s.txLine; line.dataset.who = I.who;
       const words: { el: HTMLElement; f: number; seg: number }[] = [];
@@ -148,18 +293,17 @@ class FilmEngine {
       box.appendChild(line); this.tx.push({ who: I.who, words, box: line });
     }
   }
-  private url(i: number, t: number) { return `${BASE}/${TIERS[t]}/${pad(i, 4)}.webp?v=${ASSET_V}`; }
+  private url(i: number, t: number) { return `${this.base}/${TIERS[t]}/${pad(i, 4)}.webp?v=${ASSET_V}`; }
   /** The sharpest size worth fetching now: the screen's, lowered while the measured link is slow (it rises again when it
    *  speeds up). Below ~0.35 MB/s the small frames only; below ~1.2 MB/s the 960s. */
-  private targetTier(): number {
-    if (this.bw < 0) return this.screenTier;
-    return Math.min(this.screenTier, this.bw < 350e3 ? 1 : this.bw < 1.2e6 ? 2 : 3);
-  }
+  private targetTier(): number { return 1; }
   private free(i: number, t: number) { return this.have[i] < t && !this.reqd.has(i * 4 + t); }
   /** What to fetch next: the small frame of everything near the playhead first (so scrubbing always shows a picture),
    *  then those frames at the target size, then the small frames of the whole film, then the rest at the target size. */
   private nextJob(): [number, number] | null {
     const c = Math.round(mod(this.target, 1) * N); const T = this.targetTier();
+    // at rest, the frame on screen at the sharpest size first
+    if (T > 1 && performance.now() - this.lastScroll > 140 && this.free(c, T)) return [c, T];
     for (let d = 0; d < 70; d++) for (const i of [mod(c + d, N), mod(c - (d >> 1), N)]) if (this.have[i] === 0 && this.free(i, 1)) return [i, 1];
     if (T > 1) for (let d = 0; d < 36; d++) for (const i of [mod(c + d, N), mod(c - (d >> 1), N)]) if (this.free(i, T)) return [i, T];
     while (this.queue.length && this.have[this.queue[0]] > 0) this.queue.shift();
@@ -203,9 +347,12 @@ class FilmEngine {
     this.dpr = Math.min(window.devicePixelRatio || 1, 1.75);
     this.cw = Math.round(r.width * this.dpr); this.ch = Math.round(r.height * this.dpr);
     this.canvas.width = this.cw; this.canvas.height = this.ch;
-    this.scale = Math.max(r.width / FW, r.height / FH);
-    this.ox = (r.width - FW * this.scale) / 2; this.oy = (r.height - FH * this.scale) / 2;
+    this.ctx.imageSmoothingEnabled = true; this.ctx.imageSmoothingQuality = 'high';
+    this.scale = Math.max(r.width / this.fw, r.height / this.fh);
+    this.ox = (r.width - this.fw * this.scale) / 2; this.oy = (r.height - this.fh * this.scale) / 2;
     this.drawn = -1;
+    // turned between portrait and landscape (or resized past 2100 px): the versions for the new shape
+    if (this.mode === 'video' && this.vi) { const p = this.vPick(); if (p[0] !== this.vt[0] || p[1] !== this.vt[1]) void this.vSetup(p).then((ok) => { if (!ok) this.videoFailed(); }); }
   }
   private span() { return this.film.offsetHeight - this.root.clientHeight; }
   private onScroll() {
@@ -230,23 +377,33 @@ class FilmEngine {
     const fr = mod(this.cur, 1) * N;
     const i0 = Math.floor(fr), t = fr - i0;
     const dir = this.target >= this.cur ? 1 : -1;
-    for (let d = -6; d <= 28; d++) this.decode(i0 + d * dir);
-    if (this.bmps.size > 90) for (const [j, b] of this.bmps) { const dd = Math.min(Math.abs(j - i0), N - Math.abs(j - i0)); if (dd > 44) { b.close(); this.bmps.delete(j); this.bmpTier.delete(j); } }
-    this.pump();
-    this.draw(i0, t);
-    this.overlay(fr);
+    if (this.mode === 'image') { for (let d = -6; d <= 28; d++) this.decode(i0 + d * dir); this.pump(); }
+    else if (this.mode === 'video') { this.vEvict(i0, dir); this.vDecode(i0, dir, Math.abs(this.target - this.cur) * N > 6); this.vPump(); }
+    if (this.mode !== 'video' && this.bmps.size > 90) for (const [j, b] of this.bmps) {
+      const dd = Math.min(Math.abs(j - i0), N - Math.abs(j - i0));
+      if (dd > 44) { b.close(); this.bmps.delete(j); this.bmpTier.delete(j); }
+    }
+    // the HUD, labels and copy follow the frame actually on screen, never the scroll ahead of it
+    const shown = this.draw(i0, t, fr);
+    if (Math.round(shown) !== this.shownI) { this.shownI = Math.round(shown); this.root.dataset.frame = String(this.shownI); }
+    this.overlay(shown);
     this.raf = requestAnimationFrame(this.tick);
   }
-  private draw(i0: number, t: number) {
-    const a = this.nearestBmp(i0); if (a < 0) return;
+  /** Draw film frame i0 (+ t toward the next); returns the film position on screen (the nearest decoded frame when
+   *  the wanted one is not ready yet). */
+  private draw(i0: number, t: number, fr: number): number {
+    const a = this.nearestBmp(i0); if (a < 0) return fr;
+    const shown = a === i0 ? fr : a;
     const i1 = mod(i0 + 1, N);
     const tt = this.bmps.has(i1) && a === i0 && t > 0.02 ? Math.round(t * 64) / 64 : 0;
-    if (a === this.drawn && tt === this.drawnT) return;
-    const c = this.ctx; const dw = FW * this.scale * this.dpr, dh = FH * this.scale * this.dpr; const x = this.ox * this.dpr, y = this.oy * this.dpr;
-    c.globalAlpha = 1; c.drawImage(this.bmps.get(a)!, x, y, dw, dh);
-    if (tt > 0) { c.globalAlpha = tt; c.drawImage(this.bmps.get(i1)!, x, y, dw, dh); c.globalAlpha = 1; }
+    if (a === this.drawn && tt === this.drawnT) return shown;
+    const c = this.ctx; const dw = this.fw * this.scale * this.dpr, dh = this.fh * this.scale * this.dpr; const x = this.ox * this.dpr, y = this.oy * this.dpr;
+    const put = (j: number) => { const [fx, fy, fw, fh] = this.cropOf(j); c.drawImage(this.bmps.get(j)!, x + fx * dw, y + fy * dh, fw * dw, fh * dh); };
+    c.globalAlpha = 1; put(a);
+    if (tt > 0) { c.globalAlpha = tt; put(i1); c.globalAlpha = 1; }
     this.drawn = a; this.drawnT = tt;
     if (!this.firstDrawn) { this.firstDrawn = true; this.root.dataset.ready = '1'; }
+    return shown;
   }
   private txt(key: string, el: HTMLElement | null | undefined, v: string) { if (!el || this.lastText[key] === v) return; this.lastText[key] = v; el.textContent = v; }
   private sx(x: number) { return this.ox + x * this.scale; }
@@ -254,7 +411,7 @@ class FilmEngine {
 
   private overlay(ff: number) {
     const fr = ff / SUB; const T = this.tracks; const E = this.els;
-    if (E.loader) { const p = Math.min(1, this.loaded / 30); E.loader.style.opacity = this.firstDrawn ? '0' : '1'; this.txt('lp', E.loaderPct, `${Math.round(p * 100)}%`); }
+    if (E.loader && !E.loader.dataset.gone) { const p = (Math.min(1, this.loaded / 30)).toFixed(3); if (E.loader.dataset.p !== p) E.loader.dataset.p = p; }   // (the radar loader reads it)
     for (const c of this.copy) {
       const p = c.a === c.b ? 1 - smooth(c.c, c.d, fr) : smooth(c.a, c.b, fr) * (1 - smooth(c.c, c.d, fr));
       const q = Math.round(p * 1000) / 1000;
@@ -295,6 +452,9 @@ class FilmEngine {
       if (mode === 'route' || mode === 'takeoff') return id(r) === 'dep';
       return false;
     }).slice(0, this.tags.length);
+    // a portrait phone: the chapter copy fills the bottom of the screen, so a block that falls on it fades out
+    let copyTop = Infinity;
+    if (this.portrait) for (const c of this.copy) if (c.el.style.visibility === 'visible') { const b = c.el.getBoundingClientRect(); copyTop = Math.min(copyTop, b.top); }
     let used = 0;
     for (const { r, x, y } of want) {
       const el = this.tags[used]; const ac = T.ac[r[0]]; const ph = T.phases[r[5]];
@@ -308,7 +468,9 @@ class FilmEngine {
       if (this.tagText[used] !== html) { this.tagText[used] = html; el.querySelector('div')!.innerHTML = html; }
       el.dataset.kind = ac.kind; el.dataset.mode = mode;
       el.style.transform = `translate3d(${X.toFixed(1)}px, ${Y.toFixed(1)}px, 0)`;
-      el.style.opacity = fade.toFixed(3);
+      // near the right edge the box hangs to the left of its aircraft
+      const flip = X > window.innerWidth - (mode === 'radar' ? 90 : 150) ? '1' : '0'; if (el.dataset.flip !== flip) el.dataset.flip = flip;
+      el.style.opacity = (fade * (Number.isFinite(copyTop) ? 1 - smooth(copyTop - 70, copyTop - 20, Y) : 1)).toFixed(3);
       used++;
     }
     for (let j = used; j < this.tags.length; j++) if (this.tags[j].style.opacity !== '0') this.tags[j].style.opacity = '0';
@@ -324,7 +486,7 @@ class FilmEngine {
       const k = el.dataset.anchor!; const ix = T.anchors.indexOf(k); const p = AN[ix], q = AN1[ix]; const o = show(k);
       if (!p || o <= 0.001) { if (el.style.opacity !== '0') el.style.opacity = '0'; return; }
       const x = q ? p[0] + (q[0] - p[0]) * t : p[0], y = q ? p[1] + (q[1] - p[1]) * t : p[1];
-      el.style.transform = `translate3d(${this.sx(x).toFixed(1)}px, ${this.sy(y).toFixed(1)}px, 0)`; el.style.opacity = o.toFixed(3);
+      const Y = this.sy(y); el.style.transform = `translate3d(${this.sx(x).toFixed(1)}px, ${Y.toFixed(1)}px, 0)`; el.style.opacity = (o * (Number.isFinite(copyTop) ? 1 - smooth(copyTop - 50, copyTop - 10, Y) : 1)).toFixed(3);
     });
     // the numbers of the landing and the take-off
     const hero = rows.find((r) => id(r.r) === 'hero'), dep = rows.find((r) => id(r.r) === 'dep');
@@ -380,19 +542,23 @@ export default function Landing() {
   const ref = React.useRef<HTMLElement>(null);
   React.useEffect(() => {
     if (!ref.current) return;
-    const e = new FilmEngine(ref.current);
-    return () => e.destroy();
+    const root = ref.current;
+    let e = new FilmEngine(root);
+    // turned between portrait and landscape: the other film, with its own tracks
+    const onTurn = () => { if (isPortrait() !== e.portrait) { e.destroy(); e = new FilmEngine(root); } };
+    window.addEventListener('resize', onTurn);
+    return () => { window.removeEventListener('resize', onTurn); e.destroy(); };
   }, []);
   const L = (i: number, children: React.ReactNode, cls = '') => <span className={`${s.line} ${cls}`} style={{ ['--i' as string]: i }}>{children}</span>;
   const radio = (who: string, text: string, frames: string, pilot = false) => (
     <span className={s.rx}><i className={pilot ? s.plt : ''}>{who}</i><q className={s.type} data-type={frames}>{text}</q></span>
   );
   return (
-    <main ref={ref} className={s.root}>
+    <main ref={ref} className={s.root} data-loader-root>
       <header className={s.nav}>
-        <Link href="/" className={s.brand} aria-label="SKYCONTROL">
-          <svg viewBox="0 0 24 24" aria-hidden="true" className={s.logo}><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="5.5" /><path d="M12 12 L19 5" /></svg>
-          SKYCONTROL
+        <Link href="/" className={s.brand} aria-label="OpenATC">
+          <LogoMark size={24} />
+          OpenATC
         </Link>
         <div className={s.navMid}>
           <span className={s.live}><i />{SITE.icao}</span>
@@ -439,7 +605,7 @@ export default function Landing() {
               {L(0, `Air traffic control simulator · ${SITE.icao}`, s.eyebrow)}
               <h1 className={s.h1}>{L(1, 'Take the')} {L(2, 'frequency')} {L(3, `at ${SITE.iata}.`)}</h1>
               {L(4, <>Vector it, sequence it, land it. Push it, taxi it, launch it. Real traffic into San Francisco International, in your browser, <em>with your voice</em>.</>, s.lead)}
-              <span className={`${s.line} ${s.ctaRow}`} style={{ ['--i' as string]: 5 }}>
+              <span className={`${s.line} ${s.ctaRow} ${s.ctaMore}`} style={{ ['--i' as string]: 5 }}>
                 <Link href="/start" className={s.ctaPrimary}>Play now</Link>
                 <span className={s.ctaNote}>Free · no install · scroll, it loops</span>
               </span>
@@ -466,7 +632,7 @@ export default function Landing() {
               <h2 className={s.h2}>{L(1, 'Cleared to land.')}</h2>
               <span className={`${s.line} ${s.radio}`} style={{ ['--i' as string]: 2 }}>
                 {radio('TWR', SITE.land[0], '160,184')}
-                {radio('SJX12', SITE.land[1], '186,198', true)}
+                {radio('DAL40', SITE.land[1], '186,198', true)}
               </span>
               <span className={`${s.line} ${s.hudNums}`} style={{ ['--i' as string]: 3 }}>
                 <span><small>ALT</small><b data-el="hudAlt">1,200</b><small>FT</small></span>
@@ -489,7 +655,7 @@ export default function Landing() {
 
             <article data-copy="268,278,294,303" className={s.copy}>
               {L(0, '05 · Pushback', s.eyebrow)}
-              <h2 className={s.h2}>{L(1, 'Across the apron,')} {L(2, 'a 747 wants out.')}</h2>
+              <h2 className={s.h2}>{L(1, 'Across the apron,')} {L(2, 'an A380 wants out.')}</h2>
               <span className={`${s.line} ${s.cmds}`} style={{ ['--i' as string]: 3 }}><code>{SITE.push}</code></span>
               <span data-el="strips" className={`${s.line} ${s.strips}`} style={{ ['--i' as string]: 4 }}>
                 {SITE.strips.map(([id, cs, ty]) => <span key={id} data-strip={id} className={s.strip}><b>{cs}</b><em>{ty}</em><i data-st>AT GATE</i></span>)}
@@ -517,7 +683,7 @@ export default function Landing() {
               <h2 className={s.h2}>{L(1, 'Cleared for take-off.')}</h2>
               <span className={`${s.line} ${s.radio}`} style={{ ['--i' as string]: 2 }}>
                 {radio('TWR', SITE.takeoff[0], '357,372')}
-                {radio('DLH455', SITE.takeoff[1], '374,384', true)}
+                {radio('ETD24', SITE.takeoff[1], '374,384', true)}
               </span>
               <span className={`${s.line} ${s.hudNums}`} style={{ ['--i' as string]: 3 }}>
                 <span><small>ALT</small><b data-el="hudAlt2">0</b><small>FT</small></span>
@@ -539,7 +705,7 @@ export default function Landing() {
             <article data-copy="452,462,600,601" className={`${s.copy} ${s.outro}`}>
               {L(0, 'Free · in your browser · no install', s.eyebrow)}
               <h2 className={s.h1}>{L(1, 'Your scope.')} {L(2, 'Your sky.')}</h2>
-              <span className={`${s.line} ${s.ctaRow}`} style={{ ['--i' as string]: 3 }}>
+              <span className={`${s.line} ${s.ctaRow} ${s.ctaMain}`} style={{ ['--i' as string]: 3 }}>
                 <Link href="/learn" className={s.ctaPrimary}>New here? Learn the ropes</Link>
                 <Link href={`/play?icao=${SITE.icao}`} className={s.ctaGhost}>Jump in at {SITE.iata}</Link>
               </span>
@@ -548,16 +714,17 @@ export default function Landing() {
                   <Link key={pos} href={`/play?icao=${SITE.icao}&position=${pos}`} className={s.seatCard}><b>{name}</b><span>{what}</span></Link>
                 ))}
               </span>
-              <span className={`${s.line} ${s.ctaRow}`} style={{ ['--i' as string]: 5 }}>
+              <span className={`${s.line} ${s.ctaRow} ${s.ctaMore}`} style={{ ['--i' as string]: 5 }}>
                 <Link href="/start" className={s.ctaLink}>Set up your own shift</Link>
                 <Link href="/settings" className={s.ctaLink}>Voice &amp; settings</Link>
+                <Link href="/hangar" className={s.ctaLink}>Browse the hangar</Link>
                 <a href="https://huggingface.co/srinath-exe/skycontrol-atc-command-2m" target="_blank" rel="noopener noreferrer" className={s.ctaLink}>Open model on Hugging Face</a>
                 <span className={s.ctaNote}>keep scrolling and it loops</span>
               </span>
             </article>
           </div>
 
-          <div data-el="loader" className={s.loader} aria-hidden="true"><i /><span>Tuning the scope <b data-el="loaderPct">0%</b></span></div>
+          <RadarLoader />
         </div>
       </section>
     </main>

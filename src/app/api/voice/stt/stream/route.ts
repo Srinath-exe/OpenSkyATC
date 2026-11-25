@@ -8,6 +8,7 @@
   Parakeet only (Whisper is the whole-recording fallback on /api/voice/stt). 501 when Parakeet's files are missing: the
   client then sends the whole recording as before.
 */
+import { withRequestId } from '@/lib/requestId';
 import { clientKey, sttState, RateLimiter, decodeAudio, parseNames, GateFull } from '../handler';
 import { transcribeParakeet, parakeetReady } from '../engine';
 import { SttStream, StreamStore, STREAM_LIMITS } from '../stream';
@@ -19,7 +20,7 @@ const g = globalThis as unknown as { __openatcSttStreams?: StreamStore };
 const store = (g.__openatcSttStreams ??= new StreamStore());
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', 'cache-control': 'no-store' } });
 
-export async function POST(req: Request): Promise<Response> {
+async function handlePost(req: Request): Promise<Response> {
   const t0 = Date.now();
   const st = sttState();
   const sid = req.headers.get('x-stt-sid') || '';
@@ -38,18 +39,20 @@ export async function POST(req: Request): Promise<Response> {
   if (seq === 0 && !s) {
     st.streams ??= new RateLimiter(STREAM_LIMITS.sessionsPerMinute, 8);
     if (!st.streams.take(clientKey(req.headers))) return json({ error: 'too many requests' }, 429);
-    s = new SttStream(parseNames(req.headers.get('x-stt-names')), async (audio, names) => {
+    const run = async (audio: Float32Array, names: string[]) => {
       const r = await st.gate.run(() => transcribeParakeet(audio, { names }));
       st.loaded.parakeet = true;
       return { text: r.text, ms: r.ms, model: r.model };
-    });
+    };
+    // the running reading for the live transcript: only when the model is idle, never ahead of a real phrase
+    s = new SttStream(parseNames(req.headers.get('x-stt-names')), run, async (audio, names) => { if (st.gate.busy > 0) throw new Error('busy'); return run(audio, names); });
     if (!store.create(sid, s)) return json({ error: 'speech server busy, try again' }, 503);
   }
   if (!s) return json({ error: 'unknown or expired stream' }, 404);
   if (seq !== s.seq) return json({ error: `expected chunk ${s.seq}` }, 409);
   s.seq++;
   s.push(pcm);
-  if (!end) return json({ partial: s.partial(), sec: +s.seconds.toFixed(2), serverMs: Date.now() - t0 });
+  if (!end) return json({ partial: s.live(), sec: +s.seconds.toFixed(2), serverMs: Date.now() - t0 });
   try {
     const r = await Promise.race([s.end(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 12_000))]);
     if (r.failed) console.warn(`[stt stream] ${r.failed} of ${r.segments} phrases failed: ${[...new Set(s.errors)].join('; ')}`);
@@ -59,3 +62,5 @@ export async function POST(req: Request): Promise<Response> {
     return json({ error: err instanceof Error && err.message === 'timeout' ? 'speech recognition timed out' : `speech recognition failed: ${String(err)}` }, 504);
   } finally { store.delete(sid); }
 }
+
+export const POST = withRequestId(handlePost);

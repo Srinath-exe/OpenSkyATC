@@ -103,7 +103,7 @@ export default function GroundView({ theme: themeProp }: GroundViewProps) {
   const edgeIconRef = useRef<HTMLSpanElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const rendererRef = useRef<GroundRenderer | null>(null);
-  const geomRef = useRef<GroundGeometry | null>(null);
+  const geomRef = useRef<(GroundGeometry & { naming?: string }) | null>(null);
   const camRef = useRef<FrameCam>({ cx: 0, cy: 0, ws: 1, w: 1, h: 1, zoom: 13, pxPerM: 1, centreLat: 0 });
   const dragRef = useRef<DragState | null>(null);
   const pressRef = useRef<Press | null>(null);
@@ -212,11 +212,12 @@ export default function GroundView({ theme: themeProp }: GroundViewProps) {
     // ── geometry / style sync ──
     const syncAirport = () => {
       const e = store.engine;
-      if (e === lastEngine) return;
+      if (e === lastEngine && (!e || geomRef.current?.naming === e.naming)) return;
+      if (e && e === lastEngine) { geomRef.current = Object.assign(buildGroundGeometry(e), { naming: e.naming }); setGeomVersion(v => v + 1); return; }   // only the names changed
       lastEngine = e;
       dragRef.current = null; pressRef.current = null;
       if (!e) { geomRef.current = null; return; }
-      const geom = buildGroundGeometry(e);
+      const geom = Object.assign(buildGroundGeometry(e), { naming: e.naming });
       geomRef.current = geom;
       // the store drops mapReady on every load(); re-assert once the (possibly new) style is in
       const reassert = () => { if (readyRef.current) store.setMapReady(true); };

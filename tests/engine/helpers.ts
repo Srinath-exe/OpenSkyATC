@@ -170,6 +170,9 @@ export function runwayFrame(e: SimEngine, endName: string, p: XY): { along: numb
 }
 /** True when the aircraft nose is aligned (+-tolDeg) with a taxiway-graph edge of some node within `maxM` (i.e. it sits on a lane, facing along it). */
 export function facingTaxiway(e: SimEngine, a: AircraftState, tolDeg = 35, maxM = 40): boolean {
+  // a swing-out push leaves the nose pointing at the lane node the taxi starts from
+  const jn = (e as unknown as { sc(x: AircraftState): { pushJoin: string | null }; nodeXY(id: string): XY | null }); const jid = jn.sc(a).pushJoin, jx = jid ? jn.nodeXY(jid) : null;
+  if (jx && dist(a.pos, jx) < 160 && Math.abs(angleDelta(a.heading, headingTo(a.pos, jx))) < 32) return true;
   for (const id of e.air.nodes.keys()) {
     const nx = e.nodeXY(id)!;
     if (dist(nx, a.pos) > maxM) continue;

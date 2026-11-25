@@ -41,6 +41,28 @@ export interface NeuralLineStat { text: string; voice: string; chunks: number; f
 
 const MAX_WAITING = 2;
 const STALE_MS = 12_000;
+
+// ── the player's radio key ───────────────────────────────────────────────────
+// one frequency: while the player holds push-to-talk nobody else transmits. Pilot lines wait, then go out RADIO_GAP_MS
+// after the key is let go (a breath between transmissions, as on a real frequency).
+const RADIO_GAP_MS = 1500;
+const radioKey = { down: false, upAt: -1e9 };
+const voices = new Set<{ kick(): void }>();
+const waiting: Array<() => void> = [];
+let freeTimer: ReturnType<typeof setTimeout> | null = null;
+/** The player keyed or released the radio. */
+export function setRadioKey(down: boolean): void {
+  if (radioKey.down === down) return;
+  radioKey.down = down;
+  if (freeTimer) { clearTimeout(freeTimer); freeTimer = null; }
+  if (down) return;
+  radioKey.upAt = now();
+  freeTimer = setTimeout(() => { freeTimer = null; if (radioBusy()) return; for (const v of voices) v.kick(); for (const f of waiting.splice(0)) { try { f(); } catch { /* ignore */ } } }, RADIO_GAP_MS + 20);
+}
+/** The player is transmitting (or just stopped): other voices wait. */
+export const radioBusy = (): boolean => radioKey.down || now() - radioKey.upAt < RADIO_GAP_MS;
+/** Run `f` once the frequency is free (now, if it is). */
+export function whenRadioFree(f: () => void): void { if (!radioBusy()) f(); else { waiting.push(f); if (waiting.length > 4) waiting.shift(); } }
 const LOAD_TIMEOUT_MS = 90_000;
 const LINE_GAP_S = 0.3;
 const CLAUSE_GAP_S = 0.06;
@@ -60,6 +82,8 @@ export class NeuralPilotVoice {
   private chunkOf = new Map<number, { line: Line; chunk: Chunk }>();
   private queue: Line[] = [];
   private current: Line | null = null;
+  /** A line is sounding or waiting to (the tutorial's narrator waits for the radio to be quiet). */
+  get busy(): boolean { return !!this.current || this.queue.length > 0; }
   private cursor = 0;
   private endTimer: ReturnType<typeof setTimeout> | null = null;
   private loadWaiters: ((ok: boolean) => void)[] = [];
@@ -101,7 +125,9 @@ export class NeuralPilotVoice {
     if (!p.pcm && !p.failed) this.worker?.postMessage({ type: 'cancel', id: p.id });   // not started yet: skip it
   }
 
-  constructor(private audio: () => { ctx: AudioContext; out: AudioNode } | null) {}
+  constructor(private audio: () => { ctx: AudioContext; out: AudioNode } | null) { voices.add(this); }
+  /** The frequency came free: start the next line. */
+  kick(): void { this.pump(); }
 
   /** Start loading (idempotent). Resolves true when the model is ready, false if it failed. */
   load(): Promise<boolean> {
@@ -235,8 +261,9 @@ export class NeuralPilotVoice {
   }
 
   private pump(): void {
-    if (this.current) return;
-    while (this.queue.length && now() - this.queue[0].at > STALE_MS) this.drop(this.queue.shift()!);
+    if (this.current || radioBusy()) return;                        // (the player is on the radio: wait)
+    // stale: old with the frequency free (time the player spent transmitting does not count)
+    while (this.queue.length && now() - Math.max(this.queue[0].at, radioKey.upAt + RADIO_GAP_MS) > STALE_MS) this.drop(this.queue.shift()!);
     const l = this.queue[0];
     if (!l) return;
     const first = l.chunks[0];

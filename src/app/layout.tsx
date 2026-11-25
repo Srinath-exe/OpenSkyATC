@@ -16,12 +16,12 @@ const dmSans = DM_Sans({
 })
 
 export const metadata: Metadata = {
-  title: { default: 'SKYCONTROL', template: '%s · SKYCONTROL' },
+  title: { default: 'OpenATC', template: '%s · OpenATC' },
   description: 'Be the controller at San Francisco International. Push back, taxi, clear for take-off and land them, by voice, in the browser.',
-  applicationName: 'SKYCONTROL',
+  applicationName: 'OpenATC',
   metadataBase: new URL('https://openatc.aeon-labs.site'),
-  openGraph: { type: 'website', siteName: 'SKYCONTROL', title: 'SKYCONTROL: air traffic control at SFO', description: 'Be the controller at San Francisco International. Push back, taxi, clear for take-off and land them, by voice, in the browser.', images: [{ url: '/og.jpg', width: 1200, height: 630, alt: 'SFO at night, terminal and parked aircraft' }] },
-  twitter: { card: 'summary_large_image', title: 'SKYCONTROL: air traffic control at SFO', description: 'Be the controller at San Francisco International, by voice, in the browser.', images: ['/og.jpg'] },
+  openGraph: { type: 'website', siteName: 'OpenATC', title: 'OpenATC: air traffic control at SFO', description: 'Be the controller at San Francisco International. Push back, taxi, clear for take-off and land them, by voice, in the browser.', images: [{ url: '/og.jpg', width: 1200, height: 630, alt: 'SFO at night, terminal and parked aircraft' }] },
+  twitter: { card: 'summary_large_image', title: 'OpenATC: air traffic control at SFO', description: 'Be the controller at San Francisco International, by voice, in the browser.', images: ['/og.jpg'] },
   icons: {
     icon: [
       { url: '/icon.svg', type: 'image/svg+xml' },

@@ -17,7 +17,9 @@ function parseCtxOf(ctx) {
   const head = lines[0].split(' ').slice(1).filter(Boolean);
   const aircraft = lines.slice(1).filter((l) => l.trim()).map((l) => {
     const w = l.split(' '); const alt = w.find((x) => /^\d+ft$/.test(x));
-    return { callsign: w[0], altitude: alt ? parseInt(alt, 10) : 0 };
+    // the plan as in ml/stt/gold_chain.ts: without it a step-by-step taxi line has no destination and never parses
+    const i = w.findIndex((x) => x === 'ARR' || x === 'DEP'); const runway = i < 0 ? null : w.slice(i + 1).find((x) => /^\d{1,2}[LRC]?$/.test(x)) ?? null;
+    return { callsign: w[0], altitude: alt ? parseInt(alt, 10) : 0, ...(i < 0 ? {} : { plan: { kind: w[i] === 'ARR' ? 'arrival' : 'departure', runway, gateRef: w[i] === 'ARR' ? 'STAND' : null } }) };
   });
   return { aircraft, runways: head.length ? undefined : undefined };
 }

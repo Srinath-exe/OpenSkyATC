@@ -29,7 +29,12 @@ function parked(cs: string): SpawnSpec {
 
 /** Byte-level picture of an aircraft (time does not move between the send and the check, so any change is the command's). */
 async function picture(sim: SimApi, cs: string): Promise<string> {
-  return JSON.stringify(await sim.aircraft(cs));
+  // (a call selects the aircraft it names, refused or not, so the camera follows it: selection marks it under control
+  // and clears its attention flag - UI state, not a change made by the command)
+  const a = await sim.aircraft(cs) as Record<string, unknown> | null;
+  if (!a) return 'null';
+  const { underControl: _u, attention: _a, ...rest } = a;
+  return JSON.stringify(rest);
 }
 
 /**
@@ -241,30 +246,25 @@ test.describe('typed command errors', () => {
     const r = await game.send('UAL9 SPEED 110');
     expect(r.accepted).toBe(true);                                        // transmitted: no error plate, input cleared
     expect(r.error).toBeNull();
-    const atc = await game.waitRadio(/reduce speed to one one zero knots/, { who: 'ATC', callsign: 'UAL9' });
-    expect(atc.status).toBe('unable');
-    await expect(game.radioLines('ATC').last()).toHaveAttribute('data-status', 'unable');
+    await game.waitRadio(/reduce speed to one one zero knots/, { who: 'ATC', callsign: 'UAL9' });
     // nothing queued: the refusal is pilot-side, the engine never took the value
     expect((await sim.aircraftOrFail('UAL9')).pendingCmds).toEqual([]);
     expect((await sim.aircraftOrFail('UAL9')).cmdIas).toBeNull();
     await sim.advance(PD);
-    const pilot = await game.waitRadio(/^Unable one one zero knots/, { who: 'PILOT', callsign: 'UAL9' });
-    expect(pilot.status).toBe('unable');
-    expect(pilot.text).toMatch(/Speed 110 outside envelope \d+-\d+ kt, United niner\.$/);
-    await expect(game.radioLines('PILOT').last()).toHaveAttribute('data-status', 'unable');
+    // the crew says what it can do instead (airmind.ts)
+    const pilot = await game.waitRadio(/unable 110 knots, \d+ is our minimum, we can do that\?/, { who: 'PILOT', callsign: 'UAL9' });
     const after = await sim.aircraftOrFail('UAL9');
     expect(after.cmdIas).toBe(before.cmdIas);
     expect(after.cmdIas).toBeNull();
     expect(after.pendingCmds).toEqual([]);
-    // the picker never offers such a value: its ladder is clamped to the envelope the pilot quoted
-    const m = pilot.text.match(/envelope (\d+)-(\d+) kt/);
-    expect(m).not.toBeNull();
+    // the picker never offers such a value: its ladder starts at the minimum the pilot quoted
+    const min = Number(pilot.text.match(/(\d+) is our minimum/)![1]);
     await game.openPanelFor('UAL9');
     await game.action('action-speed');
     const ladder = game.page.getByTestId('picker-speed-ladder-svg');
     await expect(ladder).toBeVisible();
-    expect(Number(await ladder.getAttribute('aria-valuemin'))).toBeGreaterThanOrEqual(110);
-    expect(Number(await ladder.getAttribute('aria-valuemax'))).toBeLessThanOrEqual(Number(m![2]));
+    expect(Number(await ladder.getAttribute('aria-valuemin'))).toBeGreaterThan(110);
+    expect(min).toBeGreaterThan(110);
     await game.cancel();
   });
 

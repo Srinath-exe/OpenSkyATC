@@ -12,7 +12,9 @@
 //  (rings), pushToast. The view registers itself as the 'radar' projector so
 //  the test API's screenPos / centerOn / camera work (05 §3.2).
 // ============================================================
+import { screenDpr } from '@/lib/dpr';
 import React, { useEffect, useRef, useSyncExternalStore } from 'react';
+import { cloudGate, wheelPush } from '@/components/atc/cloudGate';
 import { sim, useSim, useSimVersion } from '../simStore';
 import type { SimEngine } from '@/lib/sim/engine';
 import { isAirborne } from '@/lib/sim/aircraft';
@@ -29,7 +31,7 @@ import { readTheme } from './theme';
 import type { RadarTheme } from './theme';
 import { PositionHistory } from './history';
 import { LabelPlacer } from './labels';
-import { paint, ilsUnderCursor } from './render';
+import { paint, ilsUnderCursor, newCompass, COMPASS_R } from './render';
 import type { Frame, HitGeometry, Measure, HeadingDrag, ProjectedRoute } from './render';
 import { magnetic, trueFromMag, hdg3, bearingTrue, distNM } from './geometry';
 import { installRadarApi } from './api';
@@ -135,6 +137,7 @@ class RadarController {
   private dpr = 1;
   private fontsReady = false;
   private hit: HitGeometry | null = null;
+  private compass = newCompass();
   private ptr: PointerState = { ...IDLE };
   private drag: HeadingDrag | null = null;
   private liveMeasure: Measure | null = null;
@@ -153,7 +156,7 @@ class RadarController {
     this.wrap = wrap; this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.theme = readTheme(wrap);
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.dpr = Math.min(screenDpr(), 2);
     this.resize();
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(wrap);
@@ -185,7 +188,7 @@ class RadarController {
   private resize(): void {
     const wrap = this.wrap, canvas = this.canvas; if (!wrap || !canvas) return;
     const w = Math.max(1, Math.round(wrap.clientWidth)), h = Math.max(1, Math.round(wrap.clientHeight));
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.dpr = Math.min(screenDpr(), 2);
     canvas.width = Math.round(w * this.dpr); canvas.height = Math.round(h * this.dpr);
     canvas.style.width = `${w}px`; canvas.style.height = `${h}px`;
     this.cam.width = w; this.cam.height = h;
@@ -228,6 +231,7 @@ class RadarController {
     }
     this.fitted = false;
     this.fitScene(false);
+    if (cloudGate.busy && this.fitted) this.setRange('15');   // out of the clouds over the airport: near enough to work, not the whole TMA
   }
 
   /** Fit the whole TMA (range preset "30"). */
@@ -274,7 +278,7 @@ class RadarController {
       showRings: sim.settings.showRings, ringsCentre: this.ui.state.ringsCentre, history: this.history, placer: this.placer,
       alerts: sim.alerts(), stageOf: (a) => sim.stageOf(a), drag: this.drag,
       draftHeading: draft && draft.kind === 'heading' ? { id: draft.id, hdgTrue: draft.hdgTrue, dir: draft.dir } : null,
-      measures: this.ui.state.measures, liveMeasure: this.liveMeasure, reducedMotion: this.reducedMotion,
+      measures: this.ui.state.measures, liveMeasure: this.liveMeasure, reducedMotion: this.reducedMotion, compass: this.compass,
     };
     this.hit = paint(frame);
     this.updateOverlays(e, this.hit);
@@ -442,12 +446,16 @@ class RadarController {
         const id = this.pick(x, y);
         this.setHover(id);
         this.idleCursor(id);
+        // the heading rose: on the aircraft under the pointer, and it stays while the pointer is inside the rose
+        const c = this.compass; c.mx = x; c.my = y
+        const sym = c.target != null ? this.hit?.symbols.get(c.target) : null
+        c.target = id ?? (sym && Math.hypot(x - sym.x, y - sym.y) < COMPASS_R + 48 ? c.target : null)
         return;
       }
       case 'pan':
         return; // handled by handleMove (needs the raw delta)
       case 'armed-vector':
-        if (moved > DRAG_PX && p.id != null) { p.mode = 'vector'; this.setHover(null); this.setCursor('vector'); this.updateDrag(e, x, y); }
+        if (moved > DRAG_PX && p.id != null) { p.mode = 'vector'; this.setHover(null); this.compass.target = null; this.setCursor('vector'); this.updateDrag(e, x, y); }
         return;
       case 'vector':
         this.updateDrag(e, x, y);
@@ -507,7 +515,7 @@ class RadarController {
     this.ptr = { ...IDLE };
     this.idleCursor(null);
   };
-  onPointerLeave = (): void => { if (this.ptr.mode === 'idle') { this.setHover(null); this.idleCursor(null); } };
+  onPointerLeave = (): void => { this.compass.target = null; if (this.ptr.mode === 'idle') { this.setHover(null); this.idleCursor(null); } };
   onContextMenu = (ev: React.MouseEvent): void => { ev.preventDefault(); };
   onDoubleClick = (ev: React.MouseEvent<HTMLCanvasElement>): void => {
     const { x, y } = this.local(ev);
@@ -527,6 +535,11 @@ class RadarController {
       if (a && isAirborne(a)) { this.stepAltitudeDraft(a, ev.deltaY < 0 ? ALT_STEP : -ALT_STEP); return; }
     }
     const f = ev.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    // zooming right into the airport dives into the clouds over it (cloudGate)
+    if (ev.deltaY < 0 && this.cam.pxPerNM > 205) {
+      const c = e.centerXY, s = this.cam.toScreen(c);
+      if (Math.hypot(s.x - x, s.y - y) < 2 * this.cam.pxPerNM) cloudGate.push('in', wheelPush(ev) * 0.6);
+    }
     this.cam.zoomBy(f, x, y);
     this.ui.patch({ range: null });
   };

@@ -21,7 +21,7 @@ from sklearn.neural_network import MLPClassifier
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "ml/verify/out"
 REPORT_SETS = ["val", "syd", "stt", "noisy"]
-FIT_SETS = ["trainA", "trainB", "hardneg"]
+FIT_SETS = ["trainA", "trainB", "hardneg"]   # adding trainP (everyday wording, half damaged: make_plain.py) made the gate stricter and lost 30-56 right lines: ml/verify/out/gate4
 RISK = 0.01           # at most 1 % of auto-sent commands wrong
 ZCLIP = 5.0           # standardised features are clipped to +-5 (train and browser): no wild extrapolation out of range
 SAY_MAX_CORRECT = 0.01  # at most 1 % of correct proposals may be bounced to "say again"

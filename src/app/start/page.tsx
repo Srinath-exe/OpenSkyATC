@@ -2,33 +2,35 @@
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  GlassPanel, Button, IconButton, Pill, Segmented, Toggle, Input, Tooltip, Kbd,
-  IconArrowUpRight, IconArrowRight, IconChevronLeft, IconSettings, IconWind, IconPlay, cx,
+  Button, Icon, IconButton, Pill, Segmented, Toggle, Input, Tooltip, LogoMark,
+  IconArrowRight, IconChevronLeft, IconSettings, IconWind, IconPlay, cx,
 } from '@/design';
 import type { WeightClass } from '@/lib/sim/aircraftDB';
 import type { RunwayEnd, RunwayPair } from '@/lib/runwayManifest';
 import { preferredEnds } from '@/lib/sim/weather';
-import { PageFrame, StateMirror } from '../_lib/PageFrame';
+import { StateMirror } from '../_lib/PageFrame';
 import {
-  AIRPORTS, AIRPORT_BY_ICAO, LISTED_AIRPORTS, runwaysOf, longestRunwayFt, satelliteUrl, sanitiseRef, windComponents, MAX_TAILWIND_KT, formatFeet, feetToMetres,
+  AIRPORTS, AIRPORT_BY_ICAO, LISTED_AIRPORTS, runwaysOf, sanitiseRef, windComponents, MAX_TAILWIND_KT, formatFeet, feetToMetres,
   type AirportMeta,
 } from '../_lib/airports';
 import {
-  useSettings, updateSettings, useHighScore, useSessionRunning, writeStartConfig,
+  useSettings, updateSettings, useHighScore, useSessionRunning, writeStartConfig, applyPrefsToDocument,
   type Difficulty, type Position, type StartConfig,
 } from '../_lib/persist';
-import { sectorAi, sectorPatch } from '@/components/atc/simStore';
+import { sectorAi, sectorPatch } from '@/components/atc/simSettings';
+import { openReport } from '@/game/Report/Report';
 import { RunwayDiagram } from './RunwayDiagram';
+import { Setup, setupDone } from '@/game/Tutorial/Setup';
+import { AirportPicker, MapBackdrop } from './AirportPicker';
 import s from './home.module.css';
 
 const WEIGHTS: WeightClass[] = ['L', 'M', 'H', 'S'];
 const WEIGHT_LABEL: Record<WeightClass, string> = { L: 'Light', M: 'Medium', H: 'Heavy', S: 'Super' };
-/** What the player works; the other sector goes to the AI (Tower = ground + runway, the 'airfield' sector). */
-type Role = 'both' | 'airfield' | 'approach';
-const ROLES: { id: Role; label: string; hint: string }[] = [
-  { id: 'both', label: 'Tower + Approach', hint: 'Every aircraft is yours, from the boundary to the gate' },
-  { id: 'airfield', label: 'Tower', hint: 'Ground and runway: push, taxi, take-off, landing. AI runs approach' },
-  { id: 'approach', label: 'Approach', hint: 'Radar: vector arrivals onto the ILS. AI runs ground and runway' },
+/** What the player works: one seat. The other is always run by the AI (Tower = ground + runway, the 'airfield' sector). */
+type Role = 'airfield' | 'approach';
+const ROLES: { id: Role; label: string; hint: string; ai: string }[] = [
+  { id: 'airfield', label: 'Tower', hint: 'Ground and runways: push, taxi, take off, land.', ai: 'The AI works Approach' },
+  { id: 'approach', label: 'Approach', hint: 'The radar: line arrivals up on the ILS.', ai: 'The AI works Tower' },
 ];
 const DIFFICULTIES: { id: Difficulty; label: string }[] = [{ id: 'low', label: 'Low' }, { id: 'normal', label: 'Normal' }, { id: 'high', label: 'High' }];
 
@@ -53,93 +55,112 @@ function initialCfg(icao: string): RunwayCfg {
 }
 
 // ---------------------------------------------------------------------------
-//  Page
+//  Page: a full-bleed night shift. The airport at dusk moves behind everything (a blurred loop rendered from the
+//  game's own 3D map), the set-up floats over it: the field and the call to action on the left, the runways on the
+//  right as a radar console.
 // ---------------------------------------------------------------------------
 export default function HomePage() {
   const router = useRouter();
-  // one airport at launch: its set-up page is the home page (the picker returns when more fields are listed)
+  // one airport listed: its set-up is the page. More: the list first, and the set-up as the second step (/start?icao=KJFK)
   const single = LISTED_AIRPORTS.length === 1 ? LISTED_AIRPORTS[0].icao : null;
   const [icao, setIcao] = React.useState<string | null>(single);
+  const [flown, setFlown] = React.useState(false);   // came through the list: the airport's map is what the drop opened on to
+  React.useEffect(() => {
+    if (single) return;
+    const read = () => { const q = new URLSearchParams(window.location.search).get('icao')?.toUpperCase() ?? ''; const ok = LISTED_AIRPORTS.some((x) => x.icao === q); setIcao(ok ? q : null); if (!ok) setFlown(false); };
+    read(); window.addEventListener('popstate', read); return () => window.removeEventListener('popstate', read);
+  }, [single]);
+  const pickAirport = (next: string | null) => { window.history.pushState(null, '', next ? `/start?icao=${next}` : '/start'); setFlown(!!next); setIcao(next); };
   const running = useSessionRunning();
   const highScore = useHighScore();
-
-  const right = (
-    <>
-      {highScore > 0 ? (
-        <Pill size="m" tone="neutral" tabular testId="home-highscore" count={highScore.toLocaleString('en')}>best</Pill>
-      ) : null}
-      {running ? (
-        <Button variant="secondary" iconLeft={<IconPlay size={16} />} onClick={() => router.push('/play')} testId="home-resume">Resume shift</Button>
-      ) : null}
-      <IconButton label="Settings" icon={<IconSettings />} size={40} variant="glass" onClick={() => router.push('/settings')} testId="home-settings-link" />
-    </>
-  );
+  const [ready, setReady] = React.useState(false);
+  const [setup, setSetup] = React.useState(false);
+  React.useEffect(() => { applyPrefsToDocument(); setReady(true); setSetup(!setupDone()); }, []);
 
   return (
-    <PageFrame testId="page-home" right={right} brandTestId="nav-brand">
-      {icao ? (
-        <Detail key={icao} airport={AIRPORT_BY_ICAO[icao]} onBack={single ? null : () => setIcao(null)} />
-      ) : (
-        <Picker onPick={setIcao} />
-      )}
-    </PageFrame>
+    <div className={s.shell} data-start-shell data-mode={icao ? 'set' : 'pick'} data-testid="page-home" data-ready={ready ? 'true' : undefined}>
+      {!icao ? <AirportPicker onPick={pickAirport} /> : icao === 'KSFO' ? <Backdrop /> : null}
+      {icao && (flown || icao !== 'KSFO') ? <MapBackdrop key={icao} icao={icao} fade={icao === 'KSFO'} /> : null}
+      <header className={s.topbar}>
+        <button type="button" className={s.brand} data-testid="nav-brand" aria-label="OpenATC home" onClick={() => router.push('/')}>
+          <LogoMark size={28} /><span>OpenATC</span>
+        </button>
+        <div className={s.topRight}>
+          {highScore > 0 ? <span className={s.best} data-testid="home-highscore"><small>Best</small><b className="tabular">{highScore.toLocaleString('en')}</b></span> : null}
+          {running ? <Button variant="secondary" iconLeft={<IconPlay size={16} />} onClick={() => router.push('/play')} testId="home-resume">Resume shift</Button> : null}
+          <IconButton label="Report something on this screen" icon={<Icon name="report" size={20} />} size={40} variant="glass" onClick={openReport} testId="report-btn" data-report-anchor="" />
+          <IconButton label="Settings" icon={<IconSettings />} size={40} variant="glass" onClick={() => router.push('/settings')} testId="home-settings-link" />
+        </div>
+      </header>
+      {setup ? <Setup onDone={() => setSetup(false)} /> : null}
+      {icao ? <Stage><Detail key={icao} airport={AIRPORT_BY_ICAO[icao]} onBack={single ? null : () => pickAirport(null)} /></Stage> : null}
+    </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-//  Airport picker
-// ---------------------------------------------------------------------------
-function Picker({ onPick }: { onPick: (icao: string) => void }) {
+function Stage({ children }: { children: React.ReactNode }) {
+  const stageRef = React.useRef<HTMLElement>(null), fitRef = React.useRef<HTMLDivElement>(null);
+  useFitToScreen(stageRef, fitRef);
+  return <main className={s.stage} ref={stageRef}><div className={s.fit} ref={fitRef}>{children}</div></main>;
+}
+
+/** Desktop: the whole set-up fits the screen, any size, no scrolling. The content is measured at full size and
+ *  zoomed down to the height there is (its width grows by the same factor, so it still spans the screen). Narrow
+ *  screens (phones, small tablets) scroll as usual. */
+function useFitToScreen(outer: React.RefObject<HTMLElement | null>, inner: React.RefObject<HTMLDivElement | null>) {
+  React.useLayoutEffect(() => {
+    const o = outer.current, el = inner.current; if (!o || !el) return;
+    let raf = 0;
+    const fit = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        if (window.innerWidth < 1100) { el.style.zoom = ''; el.style.width = ''; return; }
+        el.style.zoom = '1'; el.style.width = '100%';
+        const cs = getComputedStyle(o);
+        const have = o.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+        const z = Math.max(0.5, Math.min(1, have / el.scrollHeight));
+        el.style.zoom = z.toFixed(4); el.style.width = `${100 / z}%`;
+      });
+    };
+    fit();
+    const ro = new ResizeObserver(fit); ro.observe(o);
+    const mo = new MutationObserver(fit); mo.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
+    window.addEventListener('resize', fit);
+    return () => { ro.disconnect(); mo.disconnect(); window.removeEventListener('resize', fit); cancelAnimationFrame(raf); };
+  }, [outer, inner]);
+}
+
+/** The airport at dusk, blurred, looping; a still while it loads (and for reduced motion). */
+function Backdrop() {
+  const [still, setStill] = React.useState(false);
+  React.useEffect(() => { try { setStill(window.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch { /* */ } }, []);
   return (
-    <>
-      <section className={cx(s.hero, 'ds-enter')} aria-labelledby="home-title">
-        <h1 id="home-title" className={cx('display-xl', s.wordmark)}>SKYCONTROL</h1>
-        <p className={cx('body-m', s.heroSub)}>Ground, tower and approach control at twelve real airports. Pick a field, set the runways in use, and take the frequency.</p>
-      </section>
-      <ul className={cx(s.grid, 'ds-enter')} aria-label="Airports">
-        {LISTED_AIRPORTS.map((a) => (
-          <li key={a.icao} className={s.gridItem}>
-            <AirportCard airport={a} onClick={() => onPick(a.icao)} />
-          </li>
-        ))}
-      </ul>
-    </>
+    <div className={s.backdrop} aria-hidden="true">
+      {still ? <img src="/media/start-backdrop.jpg" alt="" className={s.backdropMedia} />
+        : <video className={s.backdropMedia} src="/media/start-backdrop.mp4" poster="/media/start-backdrop.jpg" autoPlay muted loop playsInline preload="auto" />}
+      <span className={s.backdropVeil} />
+      <span className={s.backdropGrain} />
+    </div>
   );
 }
 
-function AirportCard({ airport, onClick }: { airport: AirportMeta; onClick: () => void }) {
-  const rws = runwaysOf(airport.icao);
-  return (
-    <GlassPanel
-      interactive
-      padding="none"
-      className={s.card}
-      onClick={onClick}
-      testId={`airport-card-${airport.icao}`}
-      aria-label={`${airport.name}, ${airport.city} (${airport.icao})`}
-      data-icao={airport.icao}
-    >
-      <span className={s.cardSat} style={{ backgroundImage: `url(${satelliteUrl(airport.icao)})` }} aria-hidden="true" />
-      <span className={s.cardVeil} aria-hidden="true" />
-      <span className={s.cardBody}>
-        <span className={s.cardTop}>
-          <Pill size="xs" tone="chip" tabular uppercase>{airport.icao}</Pill>
-          <span className={s.cardArrow}><IconArrowUpRight size={18} /></span>
-        </span>
-        <span className={s.cardBottom}>
-          <span className={cx('title-m', s.cardName)}>{airport.name}</span>
-          <span className={cx('body-s', s.cardCity)}>{airport.city} · {airport.region}</span>
-          <span className={cx('label-xs', s.cardMeta)}>
-            <span className="tabular">{rws.length}</span> {rws.length === 1 ? 'runway' : 'runways'} · longest <span className="tabular">{formatFeet(longestRunwayFt(airport.icao))}</span>
-          </span>
-        </span>
-      </span>
-    </GlassPanel>
-  );
+function UtcClock() {
+  const [t, setT] = React.useState<string>('');
+  React.useEffect(() => {
+    const tick = () => { const d = new Date(); setT(`${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}Z`); };
+    tick(); const id = window.setInterval(tick, 1000); return () => window.clearInterval(id);
+  }, []);
+  return <span className={s.clock}><i />{t || '--:--:--Z'}</span>;
 }
 
+// seat glyphs (24px, stroke)
+const SEAT_ICON: Record<Role, React.ReactNode> = {
+  airfield: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22V12" /><path d="M8 12h8l-1-4H9z" /><path d="M9.5 8 12 3l2.5 5" /><path d="M6 22h12" /></svg>,
+  approach: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><path d="M12 12l6.4-6.4" /><circle cx="15.5" cy="7.5" r="1.1" fill="currentColor" /></svg>,
+};
+
 // ---------------------------------------------------------------------------
-//  Detail: runway configuration + shift setup
+//  Detail: the shift set-up
 // ---------------------------------------------------------------------------
 function Detail({ airport, onBack }: { airport: AirportMeta; onBack: (() => void) | null }) {
   const router = useRouter();
@@ -149,7 +170,7 @@ function Detail({ airport, onBack }: { airport: AirportMeta; onBack: (() => void
   const [wind, setWind] = React.useState(airport.wind);
   const [role, setRole] = React.useState<Role>(() => {
     const air = sectorAi(settings, 'airfield'), app = sectorAi(settings, 'approach');
-    return air && !app ? 'approach' : app && !air ? 'airfield' : 'both';
+    return air && !app ? 'approach' : 'airfield';
   });
   const position: Position = role === 'approach' ? 'approach' : 'tower';
   const [difficulty, setDifficulty] = React.useState<Difficulty>(settings.difficulty);
@@ -167,13 +188,13 @@ function Detail({ airport, onBack }: { airport: AirportMeta; onBack: (() => void
   const activeEnds = runways.flatMap((r) => r.ends.filter((e) => cfg[e.name]?.on).map((e) => e.name));
   const anyOn = activeEnds.length > 0;
 
-  /** Pick the into-wind end of every pair. */
-  const applyWind = () => setCfg((c) => {
+  /** Pick the into-wind end of every pair (for the wind given, or the one set). */
+  const applyWind = (w: { dir: number; kts: number } = wind) => setCfg((c) => {
     const next = { ...c };
     for (const r of runways) {
       const [a, b] = r.ends;
-      const ha = windComponents(a.hdg, wind.dir, wind.kts).headKt;
-      const hb = windComponents(b.hdg, wind.dir, wind.kts).headKt;
+      const ha = windComponents(a.hdg, w.dir, w.kts).headKt;
+      const hb = windComponents(b.hdg, w.dir, w.kts).headKt;
       const favour = ha >= hb ? a : b;
       const other = favour === a ? b : a;
       next[favour.name] = { ...next[favour.name], on: true };
@@ -200,122 +221,102 @@ function Detail({ airport, onBack }: { airport: AirportMeta; onBack: (() => void
     router.push('/play');
   };
 
+  const summary = `${role === 'airfield' ? 'Tower' : 'Approach'} · ${activeEnds.join(' ') || 'no runway'} · ${DIFFICULTIES.find((d) => d.id === difficulty)?.label} traffic`;
   return (
-    <div className={cx(s.detail, 'ds-enter')} data-testid="home-detail" data-icao={airport.icao}>
-      <section className={s.banner} aria-label={`${airport.name} overview`}>
-        <span className={s.bannerSat} style={{ backgroundImage: `url(${satelliteUrl(airport.icao, true)})` }} aria-hidden="true" />
-        <span className={s.bannerVeil} aria-hidden="true" />
-        <div className={s.bannerTop}>
-          {onBack ? <Button variant="secondary" iconLeft={<IconChevronLeft size={16} />} onClick={onBack} testId="home-change-airport">Change airport</Button> : <span className={cx('label-xs', s.bannerKicker)}>Set up your shift</span>}
-        </div>
-        <div className={s.bannerBottom}>
-          <div className={s.bannerTitleBlock}>
-            <h1 className={cx('display-l', s.bannerTitle)} data-testid="home-detail-title">{airport.name}</h1>
-            <p className={cx('body-s', s.bannerSub)}>
-              {airport.city} · <span className="tabular">{airport.icao}</span> · <span className="tabular">{airport.iata}</span> · elevation <span className="tabular">{formatFeet(airport.elevationFt)}</span>
-            </p>
+    <div className={s.detail} data-testid="home-detail" data-icao={airport.icao}>
+      {/* the shift, as the game's flight board: one row per setting, Start as the last row */}
+      <section className={s.board} aria-label={`${airport.name}: your shift`} data-testid="home-shift">
+        <header className={s.boardHead}>
+          <div>
+            {onBack ? <Button variant="secondary" size="sm" iconLeft={<IconChevronLeft size={16} />} onClick={onBack} testId="home-change-airport">Change airport</Button> : null}
+            <h1 className={s.boardTitle} data-testid="home-detail-title">{airport.name}</h1>
+            <p className={s.boardSub}><span className="tabular">{airport.icao}</span> · <span className="tabular">{airport.iata}</span> · {airport.city} · elevation <span className="tabular">{formatFeet(airport.elevationFt)}</span></p>
           </div>
-          <div className={s.bannerPills}>
-            <Pill size="m" tone="glass" tabular count={`${String(wind.dir).padStart(3, '0')}/${wind.kts}`}>wind</Pill>
-            <Pill size="m" tone="glass" tabular count={runways.length}>{runways.length === 1 ? 'runway' : 'runways'}</Pill>
-            <Pill size="m" tone="glass" tabular count={activeEnds.length} testId="home-active-count">active {activeEnds.length === 1 ? 'end' : 'ends'}</Pill>
+          <UtcClock />
+        </header>
+
+        <div className={s.row}>
+          <span className={s.rowLabel}>Seat</span>
+          <div className={s.rowBody}>
+            <div className={s.seats} role="radiogroup" aria-label="You control" data-testid="home-role">
+              {ROLES.map((r) => (
+                <button key={r.id} type="button" role="radio" aria-checked={role === r.id} className={s.seat} onClick={() => setRole(r.id)} data-testid={`home-role-${r.id}`}>
+                  <span className={s.seatTop}><span className={s.seatIcon} aria-hidden="true">{SEAT_ICON[r.id]}</span><span className={s.seatName}>{r.label}</span></span>
+                  <span className={s.seatHint}>{r.hint}</span>
+                </button>
+              ))}
+            </div>
+            <p className={s.aiLine} data-testid="home-role-hint"><i aria-hidden="true" />{ROLES.find((r) => r.id === role)?.ai}. Switch seats any time in the game.</p>
           </div>
         </div>
+
+        <div className={s.row}>
+          <span className={s.rowLabel}>Runways</span>
+          <div className={s.rowBody}>
+            <div className={s.ends}>
+              {runways.flatMap((r) => r.ends).map((e) => (
+                <button key={e.name} type="button" className={s.endChip} aria-pressed={!!cfg[e.name]?.on} onClick={() => toggleEnd(e.name)} data-testid={`board-end-${e.name}`}
+                  onMouseEnter={() => setHover(runways.find((r) => r.ends.some((x) => x.name === e.name))?.ref ?? null)} onMouseLeave={() => setHover(null)}>{e.name}</button>
+              ))}
+            </div>
+            <p className={s.rowNote}><span className="tabular" data-testid="home-active-count">{activeEnds.length}</span> {activeEnds.length === 1 ? 'end' : 'ends'} in use. Set by the wind, or pick on the map.</p>
+          </div>
+        </div>
+
+        <div className={s.row}>
+          <span className={s.rowLabel}>Wind</span>
+          <div className={s.rowBody}><WindControl key={`${wind.dir}/${wind.kts}`} wind={wind} onChange={setWind} onApply={() => applyWind()} /></div>
+        </div>
+
+        <div className={s.row}>
+          <span className={s.rowLabel}>Traffic</span>
+          <div className={s.rowBody}><Segmented ariaLabel="Difficulty" value={difficulty} onChange={(v) => setDifficulty(v as Difficulty)} items={DIFFICULTIES} testId="home-difficulty" /></div>
+        </div>
+
+        <div className={s.row}>
+          <span className={s.rowLabel}>Sound</span>
+          <div className={cx(s.rowBody, s.switches)}>
+            <StateMirror state={settings.sound ? 'on' : 'off'}>
+              <Toggle checked={settings.sound} onChange={(v) => updateSettings({ sound: v })} label="Radio and alerts" labelPosition="left" testId="home-sound" />
+            </StateMirror>
+            <StateMirror state={settings.tts ? 'on' : 'off'}>
+              <Toggle checked={settings.tts} onChange={(v) => updateSettings({ tts: v })} label="Pilot voices" labelPosition="left" testId="home-tts" />
+            </StateMirror>
+          </div>
+        </div>
+
+        <footer className={s.boardFoot}>
+          <button type="button" className={s.go} disabled={!anyOn || Boolean(seedError) || starting} onClick={start} data-testid="home-start" aria-describedby="home-start-hint">
+            <span className={s.goText}>{starting ? 'Starting…' : 'Start shift'}</span>
+            <span className={s.goMeta} id="home-start-hint" data-testid="home-start-hint">{anyOn ? summary : 'Switch on a runway end first'}</span>
+            <IconArrowRight size={22} />
+          </button>
+          <button type="button" className={s.learn} onClick={() => router.push('/learn')} data-testid="home-learn">New here? Learn it in 10 minutes <IconArrowRight size={16} /></button>
+        </footer>
       </section>
 
-      <div className={s.columns}>
-        <GlassPanel
-          variant="solid"
-          title="Runways in use"
-          parenthetical="(per end)"
-          headerRight={<WindControl wind={wind} onChange={setWind} onApply={applyWind} />}
-          className={s.runwayPanel}
-          testId="home-runways"
-        >
-          <p className={cx('body-s', s.hint)}>Click a runway end to put it in use; the chevrons show which way traffic flows. Pick which wake categories may use each end. Head- and crosswind follow the wind you set.</p>
-          <div className={s.rwyLayout}>
-            <div className={s.diagramWrap}>
-              <RunwayDiagram runways={runways} on={(e) => !!cfg[e]?.on} wind={wind} hover={hover} onHover={setHover} onToggle={toggleEnd} />
-            </div>
-            <ul className={s.rwyList} aria-label="Runways">
-              {runways.map((r) => (
-                <RunwayRow key={r.ref} pair={r} cfg={cfg} wind={wind} onToggleEnd={toggleEnd} onToggleWeight={toggleWeight} hover={hover === r.ref} onHover={setHover} />
-              ))}
-            </ul>
-          </div>
-        </GlassPanel>
-
-        <aside className={s.side}>
-          <GlassPanel variant="solid" title="Shift" testId="home-shift">
-            <div className={s.field}>
-              <span className={cx('body-s', s.fieldLabel)}>Your seat</span>
-              <div className={s.seats} role="radiogroup" aria-label="You control" data-testid="home-role">
-                {ROLES.map((r) => (
-                  <button key={r.id} type="button" role="radio" aria-checked={role === r.id} className={s.seat} onClick={() => setRole(r.id)} data-testid={`home-role-${r.id}`}>
-                    <span className={s.seatDot} aria-hidden="true" />
-                    <span className={s.seatText}><span className={s.seatName}>{r.label}</span><span className={s.seatHint}>{r.hint}</span></span>
-                  </button>
-                ))}
-              </div>
-              <span className={cx('label-xs', s.fieldNote)} data-testid="home-role-hint">Switch seats any time from the top bar.</span>
-            </div>
-            <div className={s.field}>
-              <span className={cx('body-s', s.fieldLabel)}>Traffic difficulty</span>
-              <Segmented ariaLabel="Difficulty" value={difficulty} onChange={(v) => setDifficulty(v as Difficulty)} items={DIFFICULTIES} testId="home-difficulty" />
-            </div>
-            <details className={s.advanced}>
-              <summary>Advanced</summary>
-              <Input
-                label="Seed"
-                placeholder="Random"
-                inputMode="numeric"
-                value={seed}
-                onChange={(e) => setSeed(e.target.value)}
-                error={seedError}
-                helper={seedError ? undefined : 'Same seed, same traffic. Leave empty for a fresh shift.'}
-                tabular
-                size="m"
-                fullWidth
-                testId="home-seed"
-              />
-            </details>
-            <div className={s.toggles}>
-              <StateMirror state={settings.sound ? 'on' : 'off'}>
-                <Toggle checked={settings.sound} onChange={(v) => updateSettings({ sound: v })} label="Sound" description="Radio, alerts and UI cues" labelPosition="left" className={s.toggleRow} testId="home-sound" />
-              </StateMirror>
-              <StateMirror state={settings.tts ? 'on' : 'off'}>
-                <Toggle checked={settings.tts} onChange={(v) => updateSettings({ tts: v })} label="Pilot voice" description="Synthesised readbacks" labelPosition="left" className={s.toggleRow} testId="home-tts" />
-              </StateMirror>
-            </div>
-            <div className={s.startWrap}>
-              <Button
-                variant="accent"
-                size="lg"
-                fullWidth
-                iconRight={<IconArrowRight size={18} />}
-                disabled={!anyOn || Boolean(seedError)}
-                loading={starting}
-                onClick={start}
-                testId="home-start"
-                aria-describedby="home-start-hint"
-              >
-                Start shift
-              </Button>
-              <Button variant="secondary" size="lg" fullWidth onClick={() => router.push('/learn')} testId="home-learn">New here? Learn the three seats</Button>
-              <p id="home-start-hint" className={cx('body-s', s.startHint)} data-testid="home-start-hint">
-                {anyOn
-                  ? <>{airport.icao} · {activeEnds.join(' ')} · {DIFFICULTIES.find((d) => d.id === difficulty)?.label.toLowerCase()} traffic · {role === 'both' ? 'tower + approach' : role === 'airfield' ? 'tower' : 'approach'}</>
-                  : 'Switch on at least one runway end to start.'}
-              </p>
-            </div>
-          </GlassPanel>
-          <GlassPanel variant="nested" padding="tile" className={s.tip} testId="home-tip">
-            <span className={cx('body-s', s.tipText)}>
-              Departures spawn at the gates and arrivals at the airspace boundary. Click any aircraft to see the commands that are valid right now; <Kbd>?</Kbd> opens the phraseology guide in game.
-            </span>
-          </GlassPanel>
-        </aside>
-      </div>
+      {/* the runways, docked over the airport: drag the wind, click a runway near the end traffic lands on */}
+      <section className={s.rwyPanel} data-testid="home-runways" aria-label="Runways in use">
+        <header className={s.rwyHead}>
+          <h2>Runways in use</h2>
+          <p>Drag the wind. Click a runway near the end traffic lands on.</p>
+        </header>
+        <div className={s.diagramWrap}>
+          <RunwayDiagram runways={runways} on={(e) => !!cfg[e]?.on} wind={wind} hover={hover} onHover={setHover} onToggle={toggleEnd}
+            onFlow={(end, other) => setCfg((c) => ({ ...c, [end]: { ...c[end], on: !c[end].on || c[other].on }, [other]: { ...c[other], on: false } }))}
+            onWind={(w) => { setWind(w); applyWind(w); }} />
+        </div>
+        <details className={s.advanced}>
+          <summary>Wake categories and seed</summary>
+          <ul className={s.rwyList} aria-label="Runways">
+            {runways.map((r) => (
+              <RunwayRow key={r.ref} pair={r} cfg={cfg} wind={wind} onToggleEnd={toggleEnd} onToggleWeight={toggleWeight} hover={hover === r.ref} onHover={setHover} />
+            ))}
+          </ul>
+          <Input label="Seed" placeholder="Random" inputMode="numeric" value={seed} onChange={(e) => setSeed(e.target.value)} error={seedError}
+            helper={seedError ? undefined : 'Same seed, same traffic. Leave empty for a fresh shift.'} tabular size="m" fullWidth testId="home-seed" />
+        </details>
+      </section>
     </div>
   );
 }

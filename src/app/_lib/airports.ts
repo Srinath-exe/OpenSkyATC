@@ -32,8 +32,8 @@ export const AIRPORTS: AirportMeta[] = [
 
 /** The launch scope: the airports offered to players. The others stay in the build (reachable by /play?icao=) but are
  *  not listed until each has had the same pass SFO has. */
-export const LAUNCH_AIRPORTS: string[] = ['KSFO'];
-export const LISTED_AIRPORTS: AirportMeta[] = AIRPORTS.filter((a) => LAUNCH_AIRPORTS.includes(a.icao));
+export const LAUNCH_AIRPORTS: string[] = ['KSFO', 'KJFK', 'LFPG', 'OMDB', 'WSSS', 'RJTT'];
+export const LISTED_AIRPORTS: AirportMeta[] = LAUNCH_AIRPORTS.flatMap((i) => AIRPORTS.filter((a) => a.icao === i));
 
 export const AIRPORT_BY_ICAO: Record<string, AirportMeta> = Object.fromEntries(AIRPORTS.map((a) => [a.icao, a]));
 

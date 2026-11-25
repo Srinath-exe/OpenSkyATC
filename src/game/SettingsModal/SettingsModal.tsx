@@ -19,7 +19,7 @@ export function SettingsModal() {
         <div className={styles.foot}>
           <span className={styles.footHint}>Changes apply at once and are kept on this device.</span>
           <Button variant="secondary" size="sm" iconRight={<Icon name="external-link" size={14} />} onClick={() => { close(); router.push('/settings') }} testId="set-open-full">All settings</Button>
-          <Button variant="primary" size="sm" onClick={close} testId="set-close">Done</Button>
+          <Button variant="accent" size="sm" onClick={close} testId="set-close">Done</Button>
         </div>
       }>
       <SettingsTabs variant="panel" onLeave={close} />

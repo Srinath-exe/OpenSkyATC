@@ -8,8 +8,10 @@
 */
 import { parseCommand, tokenize, resolveCallsign } from '../sim/commands';
 import type { ParseCtx } from '../sim/commands';
+import type { CommandAST } from '../sim/commandAst';
 import { canonicalLine } from './context';
-import { roundTrip, featureMap, verifierScore, gateOf, vetoOf, kindVeto } from './verify';
+import { answerWith, twoCalls } from '../sim/spokenEdits';
+import { roundTrip, featureMap, verifierScore, gateOf, vetoOf, kindVeto, cutOff, shaky } from './verify';
 import type { GenSignals, VerifierModel, RoundTrip, Gate } from './verify';
 import { VERIFIERS, VERIFIER_DEFAULT_URL } from './verify-model';
 
@@ -43,6 +45,9 @@ export interface VoiceResult extends Omit<Understood, 'source'> {
  *  model URL that answered: each model has its own fitted gate (thresholds differ), see verify-model.ts. */
 export interface L1Proposal { line: string; confidence: number; ms: number; sayAgain: boolean; signals?: GenSignals | null; model?: string }
 
+/** The gate of a model that arrived after this build (the update channel: its folder carries gate.json). */
+export const hasVerifier = (url: string): boolean => !!VERIFIERS[url];
+export function registerVerifier(url: string, gate: { full: VerifierModel; basic: VerifierModel }): void { VERIFIERS[url] ??= gate; }
 /** The fitted gate for an S1 model URL (the shipped model's when unknown). */
 export function verifierFor(url?: string | null): { full: VerifierModel; basic: VerifierModel } {
   return (url && VERIFIERS[url]) || VERIFIERS[VERIFIER_DEFAULT_URL];
@@ -63,11 +68,34 @@ export interface VoiceOptions {
 export async function understandVoice(raw: string, ctx: ParseCtx, magVar: number, l1: L1Like | null,
   state: { text: string; callsigns: string[] } | null, minConfidence = 0.5, opts: VoiceOptions = {}): Promise<VoiceResult> {
   const u = understand(raw, ctx, magVar);
-  if (u.ok || !l1 || !state || !u.transcript) return { ...u, confidence: u.ok ? 1 : null, sayAgain: false, modelMs: null };
+  if (u.transcript && cutOff(u.transcript)) return { ...u, ok: false, error: 'Say again: the call was cut off', confidence: null, sayAgain: true, modelMs: null };
+  const doubt = u.ok && l1 && state ? rulesDoubt(u, ctx, magVar) : null;
+  if ((u.ok && !doubt) || !l1 || !state || !u.transcript) return { ...u, confidence: u.ok ? 1 : null, sayAgain: false, modelMs: null };
+  if (doubt) return secondOpinion(u, doubt, ctx, magVar, l1, state, minConfidence, opts);
   let r: L1Proposal;
   try { r = await l1.complete(u.transcript, state.callsigns, state.text); }
   catch (e) { return { ...u, error: `${u.error} (voice model unavailable: ${String(e)})`, confidence: null, sayAgain: false, modelMs: null }; }
   return decideL1(u, r, ctx, magVar, minConfidence, opts);
+}
+
+/** The command the rules read, when that reading is shaky (verify.ts); null when it is plain, or is an answer / two calls. */
+export function rulesDoubt(u: Understood, ctx: ParseCtx, magVar: number): CommandAST | null {
+  const p = parseCommand(u.transcript, ctx);
+  return p.ok && p.ast && shaky(u.transcript, p.ast, ctx, ctx.magVar ?? magVar) ? p.ast : null;
+}
+const plain = (ast: CommandAST): string => JSON.stringify(ast, (k, v) => (k === 'reason' || k === 'raw' ? undefined : typeof v === 'number' ? Math.round(v) : v));
+/** A shaky rules reading goes out only when the model reads the same; a model reading the gate is sure of wins; else the player checks. */
+async function secondOpinion(u: Understood, ast: CommandAST, ctx: ParseCtx, magVar: number, l1: L1Like, state: { text: string; callsigns: string[] }, minConfidence: number, opts: VoiceOptions): Promise<VoiceResult> {
+  const asRules: VoiceResult = { ...u, confidence: 1, sayAgain: false, modelMs: null };
+  let r: L1Proposal;
+  try { r = await l1.complete(u.transcript, state.callsigns, state.text); } catch { return asRules; }   // no model: the rules alone, as before
+  const p = r.sayAgain ? null : parseCommand(r.line, ctx);
+  if (p?.ok && p.ast && plain(p.ast) === plain(ast)) return { ...asRules, modelMs: r.ms };
+  const d = decideL1({ ...u, ok: false }, r, ctx, magVar, minConfidence, opts);
+  if (d.ok) return d;
+  // neither is sure: the rules' reading, unless the model has a likely one, waits for the player
+  const line = !d.sayAgain && p?.ok && p.ast ? d.line : u.line;
+  return { ...u, ok: false, line, source: 'L1', error: 'Check: this can be read two ways: check the command and press Enter', confidence: r.confidence, sayAgain: false, modelMs: r.ms, verify: d.verify };
 }
 
 /** Everything after the model answered: rules-callsign fusion, parse, verifier gate. Pure (ml/verify/post.cjs runs it on the data). */
@@ -112,5 +140,13 @@ export function understand(raw: string, ctx: ParseCtx, magVar = 0): Understood {
   if (!transcript) return { ok: false, line: '', transcript, source: 'none', error: 'Nothing heard' };
   const r = parseCommand(transcript, ctx);
   if (r.ok && r.ast) return { ok: true, line: canonicalLine(r.ast, magVar), transcript, source: 'L0', error: null };
+  // an answer with something added to it, or two aircraft in one breath (the game's spokenEdits.ts): sent as said
+  const toks = tokenize(transcript), c = resolveCallsign(toks, 0, ctx);
+  if (c.callsign) {
+    const more = answerWith(c.callsign, toks.slice(c.consumed).map((t) => t.text).filter((t) => t !== ',').join(' '), ctx, parseCommand);
+    if (more) return { ok: true, line: `${c.callsign} ${more.yes ? 'approved' : 'negative'} but ${more.rest}`, transcript, source: 'L0', error: null };
+    const calls = twoCalls(transcript, ctx, toks, resolveCallsign, parseCommand);
+    if (calls) return { ok: true, line: calls.map((t) => { const x = parseCommand(t, ctx); return x.ok && x.ast ? canonicalLine(x.ast, magVar) : t; }).join(' | '), transcript, source: 'L0', error: null };
+  }
   return { ok: false, line: transcript, transcript, source: 'none', error: r.errors[0]?.message ?? 'Not understood' };
 }

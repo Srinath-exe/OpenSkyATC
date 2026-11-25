@@ -81,3 +81,19 @@
 .labels :global(.tutorMark-stop) { border-color: rgba(255, 74, 58, 0.8); color: #ffd2cc; }
 .labels :global(.tutorMark-go) { border-color: rgba(59, 234, 122, 0.8); color: #d4ffe2; }
 @keyframes tutorPop { from { opacity: 0; scale: 0.6; } to { opacity: 1; scale: 1; } }
+
+/* the Mapbox map is light by day: the time-of-day switch sits on a dark pill there */
+.mbxSeg { padding: 3px; border-radius: 999px; background: rgba(14, 16, 21, 0.78); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+
+/* aircraft labels over the Mapbox map: moved every frame (see MapboxMap.tsx) */
+.acLabels { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.acLabel { position: absolute; left: 0; top: 0; white-space: pre; font: 500 11px / 1.25 var(--font-mono, ui-monospace, monospace); color: #fff; will-change: transform;
+  text-shadow: 0 0 3px rgba(10, 14, 22, 0.95), 0 0 6px rgba(10, 14, 22, 0.85), 0 1px 2px rgba(10, 14, 22, 0.9); }
+/* the line from the name down to its aircraft */
+.acLabel { text-align: center; }
+.acLabel::after { content: ''; position: absolute; left: 50%; top: calc(100% + 3px); width: 1px; height: 37px; background: linear-gradient(rgba(255,255,255,0.9), rgba(255,255,255,0.35)); box-shadow: 0 0 2px rgba(10,14,22,0.8); }
+.acLabel::before { content: ''; position: absolute; left: calc(50% - 2px); top: calc(100% + 38px); width: 5px; height: 5px; border-radius: 50%; background: #fff; box-shadow: 0 0 3px rgba(10,14,22,0.9); }
+.acLabel[data-st='ghost']::after, .acLabel[data-st='ghost']::before { opacity: 0.45; }
+.acLabel[data-st='sel'] { font-weight: 700; z-index: 2; }
+.acLabel[data-st='sel'] { color: #ffb15c; }
+.acLabel[data-st='ghost'] { color: rgba(255, 255, 255, 0.6); }

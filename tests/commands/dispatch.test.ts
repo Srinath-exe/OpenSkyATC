@@ -131,10 +131,10 @@ test('dispatch e2e: full departure BAW117 at EGLL by typed commands', () => {
   assert.equal(say(e, 'BAW117 climb FL250').code, 'invalid_param');
   assert.equal(say(e, 'BAW117 descend 500').code, 'invalid_param');
   const slow = say(e, 'BAW117 speed 110');
-  assert.equal(slow.code, 'unable_envelope');
+  assert.equal(slow.code, 'queried');   // the pilot refuses and offers what it can fly (airmind.ts)
   assert.equal(slow.ok, false);
   assert.ok(slow.transmission.startsWith('Speedbird one one seven, reduce speed'), 'pilot-side refusal is transmitted');
-  assert.match(slow.readback, /^Unable .*Speedbird one one seven\.$/);
+  assert.match(slow.readback, /^Speedbird one one seven, unable 110 knots, 130 is our minimum, we can do that\?$/);
   assert.equal(say(e, 'BAW117 turn left heading 240 then direct BIG').code, 'invalid_param', 'incompatible parts refused by the parser');
   const dct = say(e, 'BAW117 direct BIG then heading 240');
   ok(dct, 'ok_queued', 'direct then heading');

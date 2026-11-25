@@ -24,18 +24,17 @@ Map<String, dynamic> _spec({List<Map<String, dynamic>>? files, String kind = 'tr
 String _manifest(List<Map<String, dynamic>> models, {String active = 'm', int schema = 1}) => jsonEncode({'schema': schema, 'active': active, 'models': models});
 
 void main() {
-  test('the bundled manifest parses, pins every file and its active model can do hotwords', () {
+  test('the bundled manifest parses, pins every file and its active model is complete', () {
     final m = ModelManifest.parse(File('assets/stt_models.json').readAsStringSync());
     final a = m.activeModel;
-    expect(a.kind, ModelKind.transducer);
-    expect(a.hotwords, isTrue);
-    expect(a.file('bpe_model'), isNotNull);
+    expect(a.kind, ModelKind.nemoTransducer);
+    expect(['encoder', 'decoder', 'joiner', 'tokens'].every((r) => a.file(r) != null), isTrue);
     for (final s in m.models) {
       for (final f in s.files) {
         expect(f.sha256, matches(RegExp(r'^[0-9a-f]{64}$')));
         expect(f.size, greaterThan(0));
-        // pinned to a commit, so the bytes behind the URL cannot change under the hash
-        expect(f.url, matches(RegExp(r'^https://huggingface\.co/.+/resolve/[0-9a-f]{40}/')));
+        // a commit on Hugging Face, or a versioned folder of our own site: the bytes behind the URL do not change
+        expect(f.url, matches(RegExp(r'^https://(huggingface\.co/.+/resolve/[0-9a-f]{40}|openatc\.aeon-labs\.site/models)/')));
       }
     }
     expect(a.totalBytes, inInclusiveRange(10e6, 150e6));

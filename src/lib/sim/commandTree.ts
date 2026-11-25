@@ -1312,7 +1312,7 @@ function validatePart(ast: CommandAST, a: AircraftState | null, ctx: ActionCtx):
       for (const x of ast.cross) checkRunwayExists(x);
       if (ast.cross.length > 1) soft('FAA: one runway crossing per clearance');
       if (!ast.auto && ast.via.length && ctx.routeExists && !ctx.routeExists(ast.dest, ast.via)) hard('no_route', REASONS.R15, 'R15');
-      if (ast.via.length > 12) hard('invalid_param', 'Route limited to 12 taxiways');
+      if (ast.via.length > 16) hard('invalid_param', 'Route limited to 16 taxiways');
       if (ctx.nextCrossingRunway && !ast.holdShortOf && !ast.cross.length) soft(`Route crosses runway ${ctx.nextCrossingRunway} — hold short inserted`);
       if (ctx.holdAllActive) hard('held_by_emergency', REASONS.R24, 'R24');
       break;

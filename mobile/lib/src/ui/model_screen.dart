@@ -10,11 +10,15 @@ import '../models/manifest.dart';
 import 'theme.dart';
 
 class ModelScreen extends StatefulWidget {
-  const ModelScreen({super.key, required this.spec, required this.downloader, required this.onInstalled, required this.onSkip});
+  const ModelScreen({super.key, required this.spec, required this.downloader, required this.onInstalled, required this.onSkip, this.installed = false, this.onBack});
   final ModelSpec spec;
   final ModelDownloader downloader;
   final VoidCallback onInstalled;
   final VoidCallback onSkip;
+
+  /// Already on the phone: the screen shows it and offers [onBack].
+  final bool installed;
+  final VoidCallback? onBack;
 
   @override
   State<ModelScreen> createState() => _ModelScreenState();
@@ -118,7 +122,14 @@ class _ModelScreenState extends State<ModelScreen> {
                   ]),
                 ),
                 const SizedBox(height: 20),
-                Row(children: [
+                if (widget.installed && _p == null)
+                  FilledButton.icon(
+                    onPressed: widget.onBack,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text('Installed on this phone · Back'),
+                    style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                  )
+                else Row(children: [
                   Expanded(
                     child: FilledButton(
                       onPressed: _running ? () => widget.downloader.cancel() : _go,
@@ -128,7 +139,7 @@ class _ModelScreenState extends State<ModelScreen> {
                   ),
                 ]),
                 const SizedBox(height: 8),
-                TextButton(onPressed: _running ? null : widget.onSkip, child: const Text('Skip: play with typed commands')),
+                if (!widget.installed) TextButton(onPressed: _running ? null : widget.onSkip, child: const Text('Skip: play with typed calls')),
                 const SizedBox(height: 8),
                 Text('Source: ${s.source}', style: const TextStyle(color: AtcColors.muted, fontSize: 11)),
               ],

@@ -10,6 +10,7 @@
 
 # next.js
 /.next/
+/.next-check/
 /out/
 
 # production
@@ -82,3 +83,9 @@ ml/tts/.build-test/
 # command-model checkpoints under evaluation (ml/s1/freeword/watch.py)
 /public/models/s1-cand/
 data/reports/
+/video/out/
+/public/dl/
+
+# in-app feedback: reports, recordings, keys; what the CLI downloads
+/data/feedback/
+/.scratch/

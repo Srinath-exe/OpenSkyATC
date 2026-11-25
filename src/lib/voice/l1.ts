@@ -5,8 +5,20 @@
 */
 import type { Signals } from './s1';
 
-export const S1_MODEL_URL = '/models/s1/2m-free-v1';   // free wording (ml/data/plain.py, docs/spec/16-COMMAND-MODEL-FREE.md); 2m-grpo-v1 kept for rollback.
+import { installedDir, releases } from '../models/updates';
+import { hasVerifier, registerVerifier } from './understand';
+
+export const S1_MODEL_URL = '/models/s1/2m-free-v5';   // round 5: more casual talk and questions, trained on from v4 (docs/spec/16-COMMAND-MODEL-FREE.md); 2m-free-v4 and 2m-free-v1 kept for rollback.
 // previous model 2m-grpo-v1: GRPO-tuned (ml/rl, +4 pts on recogniser transcripts); 2m-swap-v1 kept for rollback. Versioned: /models/* is cached for a year
+
+/** The weights to use: what the player installed, else the newest release, else the ones this build shipped with. A model
+ *  without a safety gate is never used. */
+export const s1Url = (): string => installedDir('s1') ?? releases().s1?.dir ?? S1_MODEL_URL;
+async function withGate(url: string): Promise<string> {
+  if (hasVerifier(url)) return url;
+  try { const r = await fetch(`${url}/gate.json`); if (r.ok) { registerVerifier(url, await r.json()); return url; } } catch { /* offline */ }
+  return S1_MODEL_URL;
+}
 
 /** `signals` (per-token evidence for the verifier) is null from a worker built before it existed; `model` names the
  *  weights that answered, so the verifier uses the gate fitted for them. */
@@ -17,6 +29,8 @@ export class L1Client {
   private seq = 1;
   private pending = new Map<number, { ok: (v: any) => void; err: (e: Error) => void }>();
   private ready: Promise<void> | null = null;
+  private url = S1_MODEL_URL;
+  constructor(private readonly fixed: string | null = null) {}
 
   private call<T>(msg: Record<string, unknown>, timeoutMs = 20000): Promise<T> {
     const id = this.seq++;
@@ -47,7 +61,7 @@ export class L1Client {
     this.worker.onerror = (e) => { e.preventDefault?.(); this.reset(`voice model worker failed: ${e.message || 'could not start'}`); };
     this.worker.onmessageerror = () => this.reset('voice model worker sent an unreadable message');
     // a failed load (network blip) is not cached: the next push-to-talk tries again
-    const ready = this.call<void>({ type: 'load', url: S1_MODEL_URL }, 60000).then(() => undefined);
+    const ready = withGate(this.fixed ?? s1Url()).then((url) => { this.url = url; return this.call<void>({ type: 'load', url }, 60000); }).then(() => undefined);
     this.ready = ready;
     ready.catch(() => { if (this.ready === ready) this.reset('voice model could not load'); });
     return ready;
@@ -62,6 +76,6 @@ export class L1Client {
   async complete(said: string, callsigns: string[], ctx?: string): Promise<L1Result> {
     await this.load();
     const r = await this.call<L1Result>({ type: 'complete', said, callsigns, ctx });
-    return { line: r.line, confidence: r.confidence, ms: r.ms, sayAgain: r.sayAgain, signals: r.signals ?? null, model: S1_MODEL_URL };
+    return { line: r.line, confidence: r.confidence, ms: r.ms, sayAgain: r.sayAgain, signals: r.signals ?? null, model: this.url };
   }
 }

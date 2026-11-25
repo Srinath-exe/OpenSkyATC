@@ -11,6 +11,7 @@
 //    R2 heading reversal a new heading 120 degrees or more from one given within REVERSAL_S
 //    R3 runway surprise  taxi to a runway other than the one the pilot was told to expect
 // ============================================================
+import { remembersNames } from './naming';
 import type { CommandAST, SingleAircraftCommand } from './commandAst';
 import type { AircraftState } from './types';
 import { altitudeLabel } from './phraseology';
@@ -42,7 +43,15 @@ export interface PilotQuery {
   ast: SingleAircraftCommand;
   /** The earlier instruction it contradicts (null when the question comes from what the pilot sees or hears, pilotmind.ts). */
   earlier: LedgerEntry | null;
-  rule: 'level_reversal' | 'heading_reversal' | 'runway_surprise' | 'runway_traffic' | 'traffic_on_final' | 'departure_rolling' | 'below_safe_level' | 'wrong_frequency';
+  rule: 'level_reversal' | 'heading_reversal' | 'runway_surprise' | 'runway_traffic' | 'traffic_on_final' | 'departure_rolling' | 'below_safe_level' | 'wrong_frequency'
+    | 'taxi_stand' | 'taxi_unknown' | 'taxi_route' | 'taxi_width' | 'taxi_complex' | 'taxi_traffic' | 'taxi_long' | 'taxi_hold'
+    | 'air_speed' | 'air_level' | 'air_fuel' | 'air_traffic' | 'air_wind' | 'air_high' | 'air_tight' | 'cs_similar';
+  /** What the pilot would do instead (taximind.ts): "approved" gives it. */
+  offer?: CommandAST | null;
+  /** The instruction cannot be done as given: repeating it gets the same answer. */
+  hard?: boolean;
+  /** The whole transmission the question is about (a taxi inside a longer one). */
+  whole?: CommandAST;
   /** The pilot's question, without the callsign: "previously cleared FL080, confirm now 6000". */
   question: string;
   at: number;
@@ -140,6 +149,12 @@ export class ClearanceLedger {
     return l.open;
   }
 
+  /** The pilot asks about `whole` instead of doing it (taximind.ts). */
+  ask(cs: string, q: Omit<PilotQuery, 'at' | 'ast'>, ast: SingleAircraftCommand, whole: CommandAST, time: number): void { this.of(cs).open = { ...q, ast, whole, at: time }; }
+  close(cs: string): void { const l = this.byCallsign.get(cs); if (l) l.open = null; }
+  /** An open question with its time checked. */
+  pending(cs: string, time: number): PilotQuery | null { const q = this.openQuery(cs); return q && time - q.at <= LEDGER_CONST.queryOpenS ? q : null; }
+
   /** "Roger" / "affirm" while a question is open: the instruction the pilot asked about, to execute now. */
   takeConfirmed(cs: string, time: number): SingleAircraftCommand | null {
     const l = this.byCallsign.get(cs);
@@ -199,6 +214,7 @@ function describeForLedger(p: SingleAircraftCommand, ta: number, mag: (t: number
 
 // one ledger per engine, without touching the engine class
 const LEDGERS = new WeakMap<object, ClearanceLedger>();
+remembersNames(e => LEDGERS.get(e));
 export function ledgerOf(engine: object): ClearanceLedger {
   let l = LEDGERS.get(engine);
   if (!l) { l = new ClearanceLedger(); LEDGERS.set(engine, l); }

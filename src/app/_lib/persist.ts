@@ -8,7 +8,8 @@
 //     autotower, ground_theme),
 //   - React hooks (useSyncExternalStore) over both.
 import { useSyncExternalStore } from 'react';
-import { sim, DEFAULT_SETTINGS, type Settings, type StartConfig as StoreStartConfig } from '@/components/atc/simStore';
+import type { SimStore, StartConfig as StoreStartConfig } from '@/components/atc/simStore';
+import { DEFAULT_SETTINGS, sanitizeSettings, type Settings } from '@/components/atc/simSettings';
 import * as persist from '@/components/atc/persist';
 import type { SessionRecord } from '@/components/atc/persist';
 
@@ -54,29 +55,48 @@ function writeRaw(key: string, value: string | null) {
 // ---------------------------------------------------------------------------
 //  Local listeners (prefs + resets) merged with the store subscription
 // ---------------------------------------------------------------------------
+// The store itself (and the whole simulation behind it) is not imported here: the start page would download the game to
+// show three switches. When the game is loaded its store is used; until then the same blob is read and written here, and
+// the store reads it when it starts.
+const store = (): SimStore | null => (hasWindow() ? window.__atcSim ?? null : null);
+let light: Settings = DEFAULT_SETTINGS; let lightLoaded = false;
+function hydrate() {
+  const s = store();
+  if (s) { s.hydratePersisted(); return; }
+  if (lightLoaded || !hasWindow()) return;
+  lightLoaded = true;
+  light = sanitizeSettings(persist.loadSettings(DEFAULT_SETTINGS));
+  if (!readRaw('skycontrol_tts_default_on')) { writeRaw('skycontrol_tts_default_on', '1'); if (!light.tts) { light = { ...light, tts: true }; persist.saveSettings(light); } }
+}
+function patchStore(patch: Partial<Settings>) {
+  const s = store();
+  if (s) { s.hydratePersisted(); s.updateSettings(patch); return; }
+  hydrate(); light = { ...light, ...patch }; persist.saveSettings(light);
+}
+
 const listeners = new Set<() => void>();
 function notify() { for (const l of listeners) l(); }
 function subscribe(fn: () => void) {
   listeners.add(fn);
-  const unsub = sim.subscribe(fn);
+  const unsub = store()?.subscribe(fn);
   // subscriptions happen after hydration: first chance to read the persisted settings / high score without an SSR mismatch
-  sim.hydratePersisted();
-  return () => { listeners.delete(fn); unsub(); };
+  hydrate();
+  return () => { listeners.delete(fn); unsub?.(); };
 }
 
 // ---------------------------------------------------------------------------
 //  Settings (store-owned)
 // ---------------------------------------------------------------------------
-export function getSettings(): Settings { return sim.settings; }
+export function getSettings(): Settings { return store()?.settings ?? light; }
 
 /** Merge a patch into the store (which persists and applies it live) and keep the legacy mirrors in step. */
 export function updateSettings(patch: Partial<Settings>): Settings {
-  sim.updateSettings(patch);
+  patchStore(patch);
   if ('tts' in patch) writeRaw(LS.tts, patch.tts ? '1' : '0');
   if ('autoTower' in patch) writeRaw(LS.autoTower, patch.autoTower ? '1' : '0');
   if ('groundTheme' in patch && patch.groundTheme) writeRaw(LS.groundTheme, patch.groundTheme);
   notify();
-  return sim.settings;
+  return getSettings();
 }
 
 // ---------------------------------------------------------------------------
@@ -110,10 +130,10 @@ export function applyPrefsToDocument() {
 // ---------------------------------------------------------------------------
 //  High score, history, start config, reset
 // ---------------------------------------------------------------------------
-export function getHighScore(): number { return Math.max(sim.highScore, persist.loadHighScore()); }
+export function getHighScore(): number { return Math.max(store()?.highScore ?? 0, hasWindow() ? persist.loadHighScore() : 0); }
 export function resetHighScore() {
   persist.saveHighScore(0);
-  sim.highScore = 0;
+  const s = store(); if (s) s.highScore = 0;
   notify();
 }
 
@@ -132,7 +152,7 @@ export function writeStartConfig(cfg: StartConfig) { persist.saveStartConfig(cfg
 
 /** "Reset all" (UX §G10): settings and prefs back to defaults; the high score is kept. */
 export function resetAllSettings() {
-  sim.updateSettings({ ...DEFAULT_SETTINGS });
+  patchStore({ ...DEFAULT_SETTINGS });
   writeRaw(LS.tts, null); writeRaw(LS.autoTower, null); writeRaw(LS.groundTheme, null);
   writeRaw(LS.prefs, null);
   applyPrefsToDocument();
@@ -140,8 +160,8 @@ export function resetAllSettings() {
 }
 
 /** A session is live in the store (used by "Back to shift"). */
-export function sessionRunning(): boolean { return Boolean(sim.engine); }
-export function sessionIcao(): string | null { return sim.icao || null; }
+export function sessionRunning(): boolean { return Boolean(store()?.engine); }
+export function sessionIcao(): string | null { return store()?.icao || null; }
 
 // ---------------------------------------------------------------------------
 //  Hooks

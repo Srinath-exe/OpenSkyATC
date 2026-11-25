@@ -1,4 +1,4 @@
-/* SKYCONTROL global styles. Tokens, type and motion come from src/design; no Tailwind. */
+/* OpenATC global styles. Tokens, type and motion come from src/design; no Tailwind. */
 @import "../design/tokens.css";
 @import "../design/type.css";
 @import "../design/motion.css";
