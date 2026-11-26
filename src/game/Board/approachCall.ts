@@ -23,6 +23,16 @@ export function approachCall(e: SimEngine, a: AircraftState): NextCall {
   const adv = e.airAdvice(a), mag = (t: number) => t - (e.magVar ?? 0)
   if (adv) return adv.cmd ? { cmd: adv.cmd, why: 'Traffic: it would pass too close to another one. Move it out of the way now.' } : { wait: 'Held clear of traffic. It goes on in a moment.' }
   const cur = a.cmdAltitude ?? a.targetAltitude, behind = p.lead ? ` behind ${p.lead.callsign}` : ''
+  // ── holding ──
+  if (p.leg === 'hold' && p.hold) {
+    const h = p.hold, mm = String(Math.floor(h.efc / 60) % 60).padStart(2, '0'), wait = Math.max(1, Math.round((h.efc - e.time) / 60)), lvl = h.rank === 0 ? 'lowest in the stack, leaves first' : `${ord(h.rank + 1).replace('next to land', 'first')} in the stack`
+    if (!(a.navMode === 'hold' && a.holdFixName === h.fix)) return { cmd: `${cs} hold at ${h.fix} as published, expect further clearance at ${mm}`, why: `${ord(p.place + 1)}${behind}, with about ${wait} min to lose: too long for speed and a longer way round. It holds at ${h.fix} at ${h.level.toLocaleString('en-US')} ft, ${lvl}.` }
+    if (a.holdEfc != null && h.efc > a.holdEfc + 120) return { cmd: `${cs} hold at ${h.fix} as published, expect further clearance at ${mm}`, why: 'Its wait got longer: the same hold, with the new time to expect to leave it. It goes on round as it is.' }
+    const to = h.level < cur - 400 ? e.safeDescent(a, h.level) : h.level > cur + 400 ? e.safeClimb(a, h.level) : cur
+    if (to < cur - 400) return { cmd: `${cs} descend and maintain ${to}`, why: `Down to its level in the ${h.fix} stack: ${h.level.toLocaleString('en-US')} ft, a thousand above the one below.` }
+    if (to > cur + 400) return { cmd: `${cs} climb and maintain ${to}`, why: `Up to its level in the ${h.fix} stack, above the ones waiting below.` }
+    return { wait: `Holding at ${h.fix}, ${lvl}. Expect further clearance at :${mm}, in about ${wait} min. The lowest leaves first and the rest step down.` }
+  }
   if (p.clear) return { cmd: `${cs} cleared ILS runway ${p.rwy} approach`, why: 'Pointed at the beam, below the glideslope, far enough behind the one ahead: clear the ILS. It flies itself down.' }
   // ── the turn ──
   const now = a.navMode === 'heading' ? a.targetHeading : a.heading, turn = wrap(p.hdg - now), fine = p.leg === 'final'
@@ -36,6 +46,7 @@ export function approachCall(e: SimEngine, a: AircraftState): NextCall {
     final: `Cuts on to the ${p.rwy} localizer at a gentle angle.`,
     out: `Too near the final to turn in: out to a downwind first.`,
     established: `On the ${p.rwy} localizer.`,
+    hold: 'Holding.',
   }
   if (Math.abs(turn) > (fine ? 7 : p.leg === 'base' ? 18 : 14) && !e.turnBlocked(a, p.hdg)) return { cmd: `${cs} fly heading ${(fine ? hdg5 : hdg3)(mag(p.hdg))}`, why: why[p.leg] }
   // ── down ──

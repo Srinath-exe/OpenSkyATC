@@ -42,7 +42,7 @@ async function run(seed: number): Promise<{ seed: number; setup: string; finding
   const still = new Map<string, { at: number; S: Poly[] }>();
   const outline = (id: string, type: string, p: XY, h: number): Poly[] => { const k = `${p.x.toFixed(1)},${p.y.toFixed(1)},${h.toFixed(0)}`, c = still.get(id); if (c && (c as any).k === k) return c.S; const S = shape(type, p, h); still.set(id, { at: t, S, k } as any); return S; };
   const prev = new Map<number, { x: number; y: number; h: number; v: number; phase: string }>(), held = new Map<number, number>(), offT = new Map<number, number>(), track = new Map<number, XY[]>(), started = new Map<number, XY>(), sent = new Map<string, { t: number; no: number }>();
-  let cmds = 0, refused = 0, moved = 0, maxGround = 0; const ids = new Set<number>(); let landed = 0, departed = 0; const lastPhase = new Map<number, string>();
+  let cmds = 0, refused = 0, moved = 0, maxGround = 0, holdS = 0, maxStack = 0; const heldIds = new Set<number>(); const ids = new Set<number>(); let landed = 0, departed = 0; const lastPhase = new Map<number, string>();
   const endTrack = (a: any) => { const tr = track.get(a.id); track.delete(a.id); if (!tr || tr.length < 20) return; const { cum } = arcLengths(tr); for (const w of wiggles(tr, cum)) add('wiggle', a, `${w.off.toFixed(1)} m out over ${w.len} m, from ${(w as any).from.x.toFixed(0)},${(w as any).from.y.toFixed(0)} h${(w as any).h0.toFixed(0)} to ${(w as any).to.x.toFixed(0)},${(w as any).to.y.toFixed(0)} h${(w as any).h1.toFixed(0)} off at ${w.at.x.toFixed(0)},${w.at.y.toFixed(0)}`, `wiggle|${a.id}|${Math.round(w.at.x / 40)}`, w.at); };
   const GROUND = new Set(['taxi', 'pushback', 'hold_short', 'lineup', 'rollout', 'startup']);
   try {
@@ -53,6 +53,9 @@ async function run(seed: number): Promise<{ seed: number; setup: string; finding
         if (/INCURSION|GROUND CONFLICT|COLLISION/i.test(ev.message ?? '')) { const a = e.find(ev.callsign); if (a) add(/INCURSION/i.test(ev.message) ? 'incursion' : 'groundAlert', a, String(ev.message).slice(0, 110), `alert|${ev.message.slice(0, 50)}`); } }
       const ac = e.aircraft as any[], ground = ac.filter(a => a.altitude < 1 && GROUND.has(a.phase)); maxGround = Math.max(maxGround, ground.length);
       for (const a of ac) if (a.plan.kind === 'arrival' && a.altitude > 50) { const f = seenAir.get(a.id) ?? t; seenAir.set(a.id, f); if (t - f === 1800) add('longAir', a, `30 min in the air (${a.phase}, ${Math.round(a.altitude)} ft, ${e.sc(a).aiMode ?? ''})`, `longAir|${a.id}`); } else if (seenAir.has(a.id) && !airT.has(a.id)) airT.set(a.id, t - seenAir.get(a.id)!);
+      // holding: who held, how long, the deepest stack; two in one hold less than 1,000 ft apart
+      if (t % 1 === 0) { const hs = ac.filter((a: any) => a.navMode === 'hold'), by = new Map<string, any[]>(); for (const a of hs) { heldIds.add(a.id); holdS++; const l = by.get(a.holdFixName) ?? []; l.push(a); by.set(a.holdFixName, l); }
+        for (const l of by.values()) { maxStack = Math.max(maxStack, l.length); for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) if (Math.abs(l[i].altitude - l[j].altitude) < 800 && Math.abs((l[i].cmdAltitude ?? l[i].targetAltitude) - (l[j].cmdAltitude ?? l[j].targetAltitude)) < 500 && dist(l[i].pos, l[j].pos) < 6 * 1852) add('stackClash', l[i], `same level as ${l[j].callsign} in the ${l[i].holdFixName} hold (${Math.round(l[i].altitude)} / ${Math.round(l[j].altitude)} ft)`, `stack|${l[i].id}|${l[j].id}`); } }
       for (const a of ac) { ids.add(a.id); const lp = lastPhase.get(a.id); if (lp !== a.phase) { if (a.phase === 'climb' && lp === 'takeoff') departed++; if (a.phase === 'rollout' && lp === 'landing') landed++; lastPhase.set(a.id, a.phase); } }
       for (const a of ground) {
         const p = prev.get(a.id), d = p ? Math.hypot(a.pos.x - p.x, a.pos.y - p.y) : 0; moved += d;
@@ -105,7 +108,7 @@ async function run(seed: number): Promise<{ seed: number; setup: string; finding
   } catch (err) { F.push({ kind: 'crash', seed, t: Math.round(t), cs: '', at: '', x: 0, y: 0, note: String((err as Error)?.stack ?? err).split('\n').slice(0, 3).join(' | ') }); }
   for (const a of e.aircraft) endTrack(a);
   const led: Record<string, number> = {}; for (const l of e.stats.ledger) if (l.points < 0) led[l.code] = (led[l.code] ?? 0) + 1;
-  return { seed, setup: `${who} ${ends.join('/')} ${busy}${talk ? '' : ' no talk-back'}`, findings: F, why, stats: { aircraft: ids.size, landed, departed, cmds, refused, airS: Math.round([...airT.values()].reduce((m, v) => m + v, 0)), airN: airT.size, taxiKm: +(moved / 1000).toFixed(1), maxGround, ...(process.env.DIGEST ? { digest } : {}), ...Object.fromEntries(Object.entries(led).map(([k, v]) => ['-' + k, v])) }, ms: performance.now() - t0, simS: t };
+  return { seed, setup: `${who} ${ends.join('/')} ${busy}${talk ? '' : ' no talk-back'}`, findings: F, why, stats: { aircraft: ids.size, landed, departed, cmds, refused, airS: Math.round([...airT.values()].reduce((m, v) => m + v, 0)), airN: airT.size, taxiKm: +(moved / 1000).toFixed(1), maxGround, held: heldIds.size, holdMin: Math.round(holdS / 60), maxStack, ...(process.env.DIGEST ? { digest } : {}), ...Object.fromEntries(Object.entries(led).map(([k, v]) => ['-' + k, v])) }, ms: performance.now() - t0, simS: t };
 }
 (async () => {
   process.on('message', async (m: any) => { if (m === 'stop') process.exit(0); try { process.send!({ ok: await run(m.seed) }); } catch (err) { process.send!({ err: String((err as Error)?.stack ?? err), seed: m.seed }); } });

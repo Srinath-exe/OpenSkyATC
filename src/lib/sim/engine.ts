@@ -10,6 +10,7 @@
 //  Master plan §2.2 / 06-CONTRACTS §7 are the binding contracts.
 // ============================================================
 import { stepArrivals, arrivalPlan } from './arrivals';
+import { flyHold, holdSpeedKt, publishedHold } from './holds';
 import {
   LocalProjection, XY, dist, headingTo, advance, chaikin, smoothPath, filletCorners, straightenJogs, angleDelta,
   dedupeBacktracks, arcLengths, resample, distToSegment, projectOntoPath, alongTrack, crossTrack, sampleAlong,
@@ -53,7 +54,7 @@ import {
   EMERGENCY_CATALOGUE, EmergencyEngineView, EmergencySetting, createEmergency, maybeDeclare, onDeclared, stepEmergency,
   handleLanded, completeChecklistItem, scoreOnResolved, ackReplyLine, SOULS_BY_CLASS,
 } from './emergencies';
-import { PhraseCtx, spokenRunway, spokenTaxiway, telephony as telephonyOf, readback as phraseReadback, pilotRequestLine } from './phraseology';
+import { PhraseCtx, spokenFix, spokenRunway, spokenTaxiway, telephony as telephonyOf, readback as phraseReadback, pilotRequestLine } from './phraseology';
 import type { RunwayEnd } from '../runwayManifest';
 import type { AircraftView, SpawnSpec } from './testApi';
 
@@ -92,7 +93,7 @@ interface TowState { pts: XY[]; cum: number[]; total: number; d: number; forId: 
 const TOO_WIDE_COST = 12;
 const AGAINST_FLOW_COST = 4;
 /** Flow control: arrivals in the TMA not yet established, per runway direction in use. */
-const ARR_FLOW_PER_FAMILY = 5;
+const ARR_FLOW_PER_FAMILY = 7;   // (was 5; holding at the arrival fixes takes the longer waits)
 /** Departure metering (AI ground): pushbacks approved while fewer than this many departures per active departure runway are moving on the field. */
 const DEP_QUEUE_PER_RUNWAY = 4;
 /** AI conflict net: look-ahead (s) and the predicted closest distance it acts on (NM). */
@@ -124,7 +125,7 @@ export interface AirspaceEntry { x?: number; y?: number; heading: number; altFt:
 export interface AirspaceConfig {
   radiusM: number;
   ilsRunways: ILSRunway[];
-  beacons: Array<{ id: string; x: number; y: number }>;
+  beacons: Array<{ id: string; x: number; y: number; holdHeading?: number }>;
   /** Airspace centre in engine XY (B3). Default {0,0} = OSM airport centre. */
   centerXY?: XY;
   /** Boundary entry points (weighted); positions computed from centre+radius when x/y absent. */
@@ -210,6 +211,8 @@ interface Scratch {
   rtoRecoverAt: number | null;
   lastLevelAt: number;
   overshootSaid: boolean;
+  /** Asked for further clearance once its EFC had passed (holds.ts). */
+  efcAsked: boolean;
   locMinXtM: number | null;   // smallest |cross-track| seen while armed and not captured (divergence detection)
   aiNextAt: number;           // AI approach assist: next time this aircraft is looked at
   aiAlt: number | null;       // last altitude the assist assigned
@@ -255,7 +258,7 @@ function newScratch(): Scratch {
     pull: null, pass: null, pushJoin: null, nextRequestAt: null, nextRequestKind: null, rollAt: null, handoffAt: null, handoffTo: null, exitPlan: null, taxiDest: null,
     crossingRef: null, onRunwayRef: null, luawAt: null, gaAt: null, stoppedSince: null, continueApproach: false, queried4NM: false,
     vacated: false, passedFixes: new Set(), lastStage: null, emergNoticeAt: 0, crosswindChecked: false, despawnAt: null, rtoRecoverAt: null,
-    lastLevelAt: 0, overshootSaid: false, locMinXtM: null, aiNextAt: 0, aiAlt: null, aiHdg: null, aiRank: null, aiLevel: null, aiGate: null, aiSide: null, aiBase: null, aiOrbitAt: null, aiMode: null, aiJoin: null, heldSince: null, blockedById: null, lastRerouteAt: -1e9, rerouteAvoidNodes: null, adviceAvoid: null, adviceAt: -1e9, advice: null, stuckSaid: null, tow: null, lastTowAt: -1e9, aiAvoidUntil: 0, aiAvoidFrom: -1e9, aiDeferFrom: null, holdReason: null, arffDispatchedAt: null, handoffLateScored: false, wakeWarned: new Set(), entryKey: null, touchdownDone: false,
+    lastLevelAt: 0, overshootSaid: false, efcAsked: false, locMinXtM: null, aiNextAt: 0, aiAlt: null, aiHdg: null, aiRank: null, aiLevel: null, aiGate: null, aiSide: null, aiBase: null, aiOrbitAt: null, aiMode: null, aiJoin: null, heldSince: null, blockedById: null, lastRerouteAt: -1e9, rerouteAvoidNodes: null, adviceAvoid: null, adviceAt: -1e9, advice: null, stuckSaid: null, tow: null, lastTowAt: -1e9, aiAvoidUntil: 0, aiAvoidFrom: -1e9, aiDeferFrom: null, holdReason: null, arffDispatchedAt: null, handoffLateScored: false, wakeWarned: new Set(), entryKey: null, touchdownDone: false,
     crossingEntered: false, crossingMinD: Infinity, enteredAirspace: false,
   };
 }
@@ -305,7 +308,7 @@ export class SimEngine implements EngineCommandApi, StageCtx {
   centerXY: XY = { x: 0, y: 0 };
   airspaceRadiusM = 30 * NM_TO_M;
   ilsRunways: ILSRunway[] = [];
-  beacons: Array<{ id: string; x: number; y: number }> = [];
+  beacons: Array<{ id: string; x: number; y: number; holdHeading?: number }> = [];
   entries: Array<Required<Pick<AirspaceEntry, 'x' | 'y' | 'heading' | 'altFt' | 'weight'>> & { beacon?: string; key: string }> = [];
   magVar = 0;
   transitionAltFt = 6000;
@@ -1426,6 +1429,9 @@ export class SimEngine implements EngineCommandApi, StageCtx {
     let altFt = entry.altFt;
     const inbound = this.aircraft.filter(x => x.plan.kind === 'arrival' && isAirborne(x) && !x.ilsCaptured);
     for (let k = 0; k < 2 && inbound.some(x => Math.abs(x.altitude - altFt) < 900); k++) altFt += 1000;
+    // (somebody holding at the entry's fix: the centre sends it in above the top of that stack)
+    const top = this.aircraft.reduce((m, x) => x.navMode === 'hold' && x.holdFixName === entry.beacon ? Math.max(m, x.cmdAltitude ?? x.targetAltitude) : m, 0);
+    if (top && altFt < top + 1000) altFt = Math.min(16000, top + 1000);
     const a = this.spawnArrivalAtEntry(pos, entry.heading, altFt, entry.beacon, { ident, entryKey: entry.key });
     return a;
   }
@@ -3509,17 +3515,25 @@ export class SimEngine implements EngineCommandApi, StageCtx {
     this.answerRequest(a, ['hold', 'further']);
     return this.enqueue(a, makeAst('hold', a.callsign, { fix: upper(fix), inbound, dir, legTimeMin, legNM, efc }));
   }
+  /** The hold at a fix as published (holds.ts), or null when the fix has none. */
+  publishedHoldAt(fix: string, altFt = 9000) { const b = this.beacons.find(x => x.id === upper(fix)); return b ? publishedHold(this.air.icao, b, altFt) : null; }
   private execHold(a: AircraftState, fix: string, inbound: number | null, dir: TurnDir | null, legTimeMin: number | null, legNM: number | null, efc: number | null) {
     const b = this.beacons.find(x => x.id === upper(fix)); if (!b) return;
+    const pub = publishedHold(this.air.icao, b, a.cmdAltitude ?? a.altitude);
+    const inb = inbound ?? pub?.inbound ?? headingTo(a.pos, { x: b.x, y: b.y }), turn = dir ?? (inbound == null ? pub?.dir : null) ?? 'R';
+    const legMin = legTimeMin ?? (legNM == null && inbound == null ? pub?.legMin : null) ?? (a.altitude > 14000 ? 1.5 : 1), legMi = legNM ?? (legTimeMin == null && inbound == null ? pub?.legNM ?? null : null);
+    this.sc(a).efcAsked = false;
+    // (the same hold again, with a new time to expect further clearance: it goes on round as it is)
+    if (a.navMode === 'hold' && a.holdFixName === upper(fix) && Math.abs(angleDelta(a.holdInboundHdg, inb)) < 1 && a.holdTurnDir === turn) { a.holdEfc = efc ?? a.holdEfc; a.holdLegMin = legMin; a.holdLegNM = legMi; return; }
     a.holdFix = { x: b.x, y: b.y }; a.holdFixName = upper(fix);
-    a.holdInboundHdg = inbound ?? headingTo(a.pos, { x: b.x, y: b.y });
-    a.holdTurnDir = dir ?? 'R'; a.holdPhase = 'to_fix'; a.holdTimer = 0;
-    a.holdLegMin = legTimeMin ?? (a.altitude > 14000 ? 1.5 : 1); a.holdLegNM = legNM; a.holdEfc = efc;
+    a.holdInboundHdg = inb;
+    a.holdTurnDir = turn; a.holdPhase = 'to_fix'; a.holdTimer = 0; a.holdEntry = null; a.holdLaps = 0; a.holdOutS = undefined;
+    a.holdLegMin = legMin; a.holdLegNM = legMi; a.holdEfc = efc;
     a.navMode = 'hold'; a.turnDir = null;
     if (a.ilsArmed) this.cancelIls(a);
     if (a.goAround) { a.goAround = false; if (a.phase === 'go_around') a.phase = 'climb'; }
     // holding speeds (AIM 5-3-8)
-    const hs = a.altitude <= 6000 ? 200 : a.altitude <= 14000 ? 230 : 265;
+    const hs = holdSpeedKt(Math.max(a.altitude, a.cmdAltitude ?? 0));
     if (a.cmdIas == null || a.cmdIas > hs) a.targetSpeed = Math.min(a.targetSpeed, hs);
   }
   private ilsFor(runway: string): ILSRunway | null {
@@ -4002,20 +4016,11 @@ export class SimEngine implements EngineCommandApi, StageCtx {
     for (const a of this.aircraft) {
       if (!isAirborne(a) || a.phase === 'landing') continue;
       const s = this.sc(a);
-      // --- HOLD pattern ---
+      // --- HOLD pattern (holds.ts: the entry from the heading at the fix, wind flown out, the inbound leg timed) ---
       if (a.navMode === 'hold' && a.holdFix) {
-        const fixDist = dist(a.pos, a.holdFix);
-        const hdgToFix = headingTo(a.pos, a.holdFix);
-        const outHdg = (a.holdInboundHdg + 180) % 360;
-        const legS = a.holdLegNM != null ? (a.holdLegNM * NM_TO_M) / Math.max(60, a.speed * KTS_TO_MPS) : a.holdLegMin * 60;
-        switch (a.holdPhase) {
-          case 'to_fix': a.targetHeading = hdgToFix; if (fixDist < 700) { a.holdPhase = 'outbound_turn'; a.holdTimer = 0; a.turnDir = a.holdTurnDir; } break;
-          case 'outbound_turn': { a.targetHeading = outHdg; if (Math.abs(angleDelta(a.heading, outHdg)) < 5) { a.holdPhase = 'outbound'; a.holdTimer = 0; a.turnDir = null; } break; }
-          case 'outbound': a.targetHeading = outHdg; a.holdTimer += FIXED; if (a.holdTimer >= legS) { a.holdPhase = 'inbound_turn'; a.holdTimer = 0; a.turnDir = a.holdTurnDir; } break;
-          case 'inbound_turn': { a.targetHeading = a.holdInboundHdg; if (Math.abs(angleDelta(a.heading, a.holdInboundHdg)) < 5) { a.holdPhase = 'inbound'; a.turnDir = null; } break; }
-          case 'inbound': a.targetHeading = hdgToFix; if (fixDist < 700) { a.holdPhase = 'outbound_turn'; a.holdTimer = 0; a.turnDir = a.holdTurnDir; } break;
-        }
+        const w = this.wx(); flyHold(a, FIXED, { dirTrue: w.windDirTrue, kt: w.windKt });
         a.delay.holdingS += FIXED;
+        if (a.holdEfc != null && this.time > a.holdEfc + 60 && !s.efcAsked) { s.efcAsked = true; this.raiseRequest(a, 'further', null, `${this.telephony(a.callsign)}, holding at ${spokenFix(a.holdFixName ?? '')}, our expect further clearance time has passed, request further clearance.`); }
       }
       // --- DCT ---
       if ((a.navMode === 'direct' || a.navMode === 'visual') && a.directTargetXY) {
@@ -5575,6 +5580,17 @@ export class SimEngine implements EngineCommandApi, StageCtx {
       if (req && (req.kind === 'lower' || req.kind === 'higher' || req.kind === 'going_around')) { say(a, `${a.callsign} roger, expect ${req.kind === 'higher' ? 'higher' : 'lower'} shortly`, makeAst('roger', a.callsign, {}), this.cmdRoger(a)); s.aiNextAt = this.time + 4; continue; }
       if (req && req.kind !== 'further') { say(a, `${a.callsign} unable, expect vectors for the ILS`, makeAst('unable', a.callsign, { reason: 'traffic' }), this.cmdUnable(a, 'traffic')); s.aiNextAt = this.time + 6; continue; }
       const cur = a.cmdAltitude ?? a.targetAltitude;
+      // holding: into the stack at its level, a new time when the wait has grown; it leaves when the plan turns it in
+      if (p.leg === 'hold' && p.hold) {
+        const h = p.hold, mm = String(Math.floor(h.efc / 60) % 60).padStart(2, '0');
+        const hold = () => say(a, `${a.callsign} hold at ${h.fix} as published, expect further clearance at ${mm}`, makeAst('hold', a.callsign, { fix: h.fix, inbound: null, dir: null, legTimeMin: null, legNM: null, efc: h.efc }), this.cmdHold(a, h.fix, null, null, null, null, h.efc));
+        if (!(a.navMode === 'hold' && a.holdFixName === h.fix) || req?.kind === 'further' || (a.holdEfc != null && h.efc > a.holdEfc + 120)) { if (hold()) { s.aiNextAt = this.time + 8; continue; } }
+        if (this.time >= (s.aiAltHoldUntil ?? 0)) {
+          const to = h.level < cur - 400 ? this.safeDescent(a, h.level) : h.level > cur + 400 ? this.safeClimb(a, h.level) : cur;
+          if (Math.abs(to - cur) > 400 && say(a, `${a.callsign} ${to < cur ? 'descend' : 'climb'} ${to}`, makeAst('altitude', a.callsign, { ft: to }), this.cmdAltitude(a, to, false, null))) { s.aiAlt = to; s.aiNextAt = this.time + 6; continue; }
+        }
+        s.aiNextAt = this.time + 3; continue;
+      }
       if (p.clear && !a.ilsArmed) { if (say(a, `${a.callsign} cleared ILS ${rwy}`, makeAst('ils', a.callsign, { runway: rwy }), this.cmdILS(a, rwy))) { s.aiNextAt = this.time + 12; s.aiClearedAt = this.time; continue; } }
       // the turn first: on the way in it cannot wait for the rest
       const head = a.navMode === 'heading' ? a.targetHeading : a.heading, turn = Math.abs(angleDelta(head, p.hdg));

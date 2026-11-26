@@ -1,0 +1,27 @@
+Python 3.12.16
+anyio-4.16.0.dist-info
+cffi-2.1.1.dist-info
+click-8.5.1.dist-info
+filelock-4.2.9.dist-info
+flatbuffers-25.12.19.dist-info
+fsspec-2026.9.0.dist-info
+h11-0.16.0.dist-info
+hf_xet-1.8.0.dist-info
+httpcore2-2.16.0.dist-info
+httpx2-2.16.0.dist-info
+huggingface_hub-2.4.0.dist-info
+idna-3.20.dist-info
+numpy-2.5.4.dist-info
+onnx_asr-0.12.0.dist-info
+onnxruntime-1.31.1.dist-info
+packaging-26.3.dist-info
+protobuf-7.36.2.dist-info
+pycparser-3.12.dist-info
+pyyaml-6.0.3.dist-info
+sherpa_onnx-2.0.1.dist-info
+sherpa_onnx_core-2.0.1.dist-info
+soundfile-0.14.0.dist-info
+tokenizers-0.23.3.dist-info
+tqdm-4.70.1.dist-info
+truststore-0.10.5.dist-info
+typing_extensions-4.16.0.dist-info

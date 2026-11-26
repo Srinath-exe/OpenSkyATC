@@ -100,7 +100,7 @@ export function FlightCard() {
     <div className={b.card} data-testid="flight-card">
       <div className={b.head}>
         <div><h3>{a.callsign}</h3><p>{a.airline} · {a.perf.modelName}</p></div>
-        <span className={b.stage} data-tone={stageTone(stage)}>{stageLabel(stage)}</span>
+        <span className={b.stage} data-tone={a.navMode === 'hold' ? 'warn' : stageTone(stage)}>{a.navMode === 'hold' ? `Holding ${a.holdFixName ?? ''}`.trim() : stageLabel(stage)}</span>
         {sim.engine && airMindOf(sim.engine).isMinimumFuel(a) ? <span className={b.stage} data-tone="warn" data-testid="min-fuel">Min fuel</span> : null}
       </div>
       {/* only what is acted on: the time shows when it is off */}

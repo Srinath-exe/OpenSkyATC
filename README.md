@@ -77,7 +77,7 @@ npm run test:e2e          # Playwright
 
 Typing commands always works. Voice input needs the speech server in `src/app/api/voice/stt/`, which loads ATC-ASR from `~/.cache/openatc-stt/` (set `OPENATC_STT_PARAKEET_DIR`). Without it the game uses the browser's own speech recognition.
 
-This repository is a snapshot from 25 November 2026, the same code as the live game that day. The numbers above describe the System One on Hugging Face.
+This repository is a snapshot from 26 November 2026, the same code as the live game that day. The numbers above describe the System One on Hugging Face.
 
 ## Android app
 

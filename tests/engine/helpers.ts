@@ -56,7 +56,7 @@ export function makeEngine(icao: string, opts: EngineOpts = {}): SimEngine {
       radiusM,
       centerXY,
       ilsRunways: ap.runways.map(r => ({ name: r.name, thrXY: coordToXY(r.thrCoord ?? r.coord, proj), rwdHdg: r.trueHeading, locCourse: r.localizerCourse, gsDeg: r.glideslopeDeg, thrElevFt: 0, estimated: r.derived })),
-      beacons: ap.airspace.beacons.map(b => { const p = coordToXY(b.coord, proj); return { id: b.id, x: p.x, y: p.y }; }),
+      beacons: ap.airspace.beacons.map(b => { const p = coordToXY(b.coord, proj); return { id: b.id, x: p.x, y: p.y, holdHeading: b.holdHeading }; }),
       entries: ap.entryPoints.map(ep => { const p = advance(centerXY, (ep.heading + 180) % 360, radiusM); return { x: p.x, y: p.y, heading: ep.heading, altFt: ep.altitudeFt, beacon: ep.beacon, weight: ep.weight }; }),
       magVar: ap.airspace.magVar, transitionAltFt: ap.airspace.transitionAltFt, airportName: ap.name,
     };

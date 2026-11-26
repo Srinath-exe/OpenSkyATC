@@ -540,7 +540,7 @@ class SimStore implements TestApiHost {
     const tower = ap.runways.find(r => r.towerFreq != null)?.towerFreq;
     return {
       radiusM: radar.radiusM, centerXY: radar.centerXY, ilsRunways,
-      beacons: radar.beacons.map(b => ({ id: b.id, x: b.x, y: b.y })),
+      beacons: radar.beacons.map(b => ({ id: b.id, x: b.x, y: b.y, holdHeading: b.holdHeading })),
       entries: radar.entries.map(ep => ({ x: ep.x, y: ep.y, heading: ep.heading, altFt: ep.altFt, beacon: ep.beacon, weight: ep.weight })),
       magVar: ap.airspace.magVar, transitionAltFt: ap.airspace.transitionAltFt, airportName: ap.name,
       frequencies: tower != null ? { tower: tower.toFixed(3) } : undefined, missedApproachAltFt: 3000,

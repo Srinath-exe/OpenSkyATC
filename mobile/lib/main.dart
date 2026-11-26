@@ -29,7 +29,7 @@ import 'src/ui/model_screen.dart';
 import 'src/ui/model_update_sheet.dart';
 import 'src/ui/theme.dart';
 
-const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: '2.1.0');
+const String kAppVersion = String.fromEnvironment('APP_VERSION', defaultValue: '2.2.0');
 const String kMapboxToken = String.fromEnvironment('MAPBOX_TOKEN');
 
 Future<void> main() async {

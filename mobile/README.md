@@ -94,7 +94,7 @@ LIBQUICKJSC_TEST_PATH=/opt/pub-cache/hosted/pub.dev/flutter_js-0.8.7/linux/share
 ## Build
 
 ```bash
-flutter build apk --release --target-platform android-arm64 --dart-define=APP_VERSION=2.1.0 \
+flutter build apk --release --target-platform android-arm64 --dart-define=APP_VERSION=2.2.0 \
   --dart-define=MAPBOX_TOKEN=$(grep ^NEXT_PUBLIC_MAPBOX_TOKEN= ../.env.local | cut -d= -f2-)
 (cd android && ./gradlew --stop)   # free the Gradle daemon's RAM on the shared host
 ```

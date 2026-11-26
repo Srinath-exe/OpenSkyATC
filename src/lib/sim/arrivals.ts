@@ -6,6 +6,9 @@
   vector off to the side, the racetrack at the far end), and nobody is turned in before that puts it the spacing behind
   the one ahead. Until it is on the beam an arrival is 1,000 ft above the one before it: the lowest leaves first and
   the rest step down.
+  More than four minutes to lose, near its arrival fix and not yet on its way in: it holds there (holds.ts), in a stack
+  1,000 ft apart from 8,000 ft up; the one first in the order is lowest and leaves first, once a minute and a half is
+  all it has left to lose, and the rest step down. Each is told when to expect further clearance.
   The plan is made once a second whoever works Approach; the AI gives its calls from it, the flight cards show them.
 
   Runway frame: `x` miles before the threshold along the final course, `d` miles off it on the arrival's own side.
@@ -18,7 +21,9 @@ const wrap = (v: number) => ((v % 360) + 540) % 360 - 180;
 /** Nearest place the beam is met (NM), the downwind's and the delaying lane's distance from the final course (NM). */
 const JOIN = 12, LANE = 5, WIDE = 8, RUN = 3.46;            // RUN: how far out of the join a 30 degree cut starts 2 NM off
 
-export type ArrLeg = 'inbound' | 'downwind' | 'outbound' | 'wide' | 'dogleg' | 'base' | 'final' | 'out' | 'established';
+export type ArrLeg = 'inbound' | 'downwind' | 'outbound' | 'wide' | 'dogleg' | 'base' | 'final' | 'out' | 'established' | 'hold';
+/** A hold: the fix, its level in the stack (rank 0 = lowest, leaves first), when to expect further clearance (sim s). */
+export interface ArrHold { fix: string; level: number; rank: number; efc: number }
 export interface ArrPlan {
   rwy: string; course: number; side: 1 | -1; x: number; d: number;
   /** Place in the landing order of its runway direction (0 = next), who is before it, and how far behind him it must be (NM). */
@@ -26,8 +31,11 @@ export interface ArrPlan {
   /** Seconds it would land ahead of its turn if it were turned in now (what is left to lose). */
   slack: number;
   leg: ArrLeg; hdg: number; level: number; kt: number; clear: boolean; go: boolean;
+  hold: ArrHold | null;
 }
-interface Own { side: 1 | -1; go: boolean; dir: 'out' | 'in'; wide: boolean; rwy: string; seen: number; kt: number; dog: boolean }
+interface Own { side: 1 | -1; go: boolean; dir: 'out' | 'in'; wide: boolean; rwy: string; seen: number; kt: number; dog: boolean; hold: string | null; efc: number }
+/** Holding: in with more than this to lose (s), out (the lowest) with less than this. Bottom of a stack (ft). */
+const HOLD_IN_S = 240, HOLD_OUT_S = 90, STACK_BASE_FT = 8000, STACK_TOP_FT = 15000;
 interface Book { own: Map<number, Own>; order: number[]; plans: Map<number, ArrPlan>; at: number; swapped: number }
 const BOOKS = new WeakMap<SimEngine, Book>();
 const book = (e: SimEngine): Book => { let b = BOOKS.get(e); if (!b) { b = { own: new Map(), order: [], plans: new Map(), at: -1, swapped: -1e9 }; BOOKS.set(e, b); } return b; };
@@ -85,7 +93,7 @@ export function stepArrivals(e: SimEngine): void {
   for (const a of e.aircraft) {
     if (!flying(a)) continue; const rwy = arrivalEnd(e, a), f = rwy ? frame(e, a, rwy) : null; if (!f) continue;
     let o = bk.own.get(a.id);
-    if (!o || e.sameDirection(o.rwy, rwy) === false) { o = { side: f.off >= 0 ? 1 : -1, go: false, dir: f.x > 12 ? 'in' : 'out', wide: false, rwy, seen: e.time, kt: 0, dog: false }; bk.own.set(a.id, o); }
+    if (!o || e.sameDirection(o.rwy, rwy) === false) { o = { side: f.off >= 0 ? 1 : -1, go: false, dir: f.x > 12 ? 'in' : 'out', wide: false, rwy, seen: e.time, kt: 0, dog: false, hold: null, efc: 0 }; bk.own.set(a.id, o); }
     if (o.rwy !== rwy) o.rwy = rwy;
     o.seen = e.time;
     const est = a.ilsCaptured || a.phase === 'landing';
@@ -130,8 +138,11 @@ export function stepArrivals(e: SimEngine): void {
 function plan(e: SimEngine, q: { f: Frame; o: Own; est: boolean; way: ReturnType<typeof wayIn> }, place: number, lead: AircraftState | null, leadNM: number, gap: number, slack: number, before: Array<{ f: Frame; est: boolean; o: Own }>): ArrPlan {
   const { f, o, est, way } = q, { a, x, course } = f, side = o.side, d = f.off * side, r = radiusNM(a), room = e.finalRoomNM(f.rwy) - 1;
   const at = (px: number, pd: number) => { const c = course * RAD, po = pd * side, wx = f.thr.x - (px * Math.sin(c) - po * Math.cos(c)) * NM, wy = f.thr.y - (px * Math.cos(c) + po * Math.sin(c)) * NM; return (Math.atan2(wx - a.pos.x, wy - a.pos.y) / RAD + 360) % 360; };
-  const base: ArrPlan = { rwy: f.rwy, course, side, x, d, place, lead, gapNM: gap, pathNM: way.s, leadNM, slack, leg: 'established', hdg: course, level: 3000, kt: 160, clear: false, go: true };
+  const base: ArrPlan = { rwy: f.rwy, course, side, x, d, place, lead, gapNM: gap, pathNM: way.s, leadNM, slack, leg: 'established', hdg: course, level: 3000, kt: 160, clear: false, go: true, hold: null };
   if (est) return base;
+  // ── hold: a long wait, near its arrival fix ──
+  const h = holdPlan(e, a, o, slack, before);
+  if (h) return { ...base, leg: 'hold', hdg: a.heading, level: h.level, kt: 0, clear: false, go: false, hold: h };
   // ── turn in now, or go on losing time? ──
   const inwards = way.via !== 'out';
   if (o.go && !a.ilsArmed && d > 0.4 && d < 3 && x - d * 1.75 < 5.5) { o.go = false; o.dir = 'out'; }                      // it would meet the beam too close in
@@ -175,6 +186,24 @@ function plan(e: SimEngine, q: { f: Frame; o: Own; est: boolean; way: ReturnType
   const onLevel = Math.abs(a.altitude - a.targetAltitude) < 350 && cur <= e.glideAltFt(f.rwy, meet) + 120 && a.altitude <= e.glideAltFt(f.rwy, meet) + 120;
   const clear = o.go && leg === 'final' && x > 5 && x < 24 && Math.abs(d) < 3.4 && ic <= 29.5 && towards && spaced && onLevel;
   return { ...base, leg, hdg: ((hdg % 360) + 360) % 360, level, kt, clear, go: o.go };
+}
+/** In a hold, or into one, or out of it: the stack it is in, or null when it flies the plan. */
+function holdPlan(e: SimEngine, a: AircraftState, o: Own, slack: number, before: Array<{ f: Frame; est: boolean; o: Own }>): ArrHold | null {
+  const urgent = !!a.emergency && a.emergency.status !== 'resolved';
+  // (held by the controller at a fix of the airspace: it is in that stack)
+  if (!o.hold && a.navMode === 'hold' && a.holdFixName && e.publishedHoldAt(a.holdFixName)) { o.hold = a.holdFixName; o.efc = a.holdEfc ?? e.time + Math.max(60, slack - HOLD_OUT_S); }
+  if (!o.hold) {
+    const fix = a.plan.fix ? e.beacons.find(b => b.id === a.plan.fix) : null;
+    if (!fix || urgent || o.go || a.ilsArmed || slack < HOLD_IN_S || !e.publishedHoldAt(fix.id)) return null;
+    const toFix = Math.hypot(a.pos.x - fix.x, a.pos.y - fix.y) / NM, out = Math.hypot(a.pos.x - e.centerXY.x, a.pos.y - e.centerXY.y) - Math.hypot(fix.x - e.centerXY.x, fix.y - e.centerXY.y);
+    if (toFix > 12 || out < -2 * NM) return null;                       // (near the fix, not already well inside it)
+    o.hold = fix.id; o.efc = Math.ceil((e.time + Math.max(60, slack - HOLD_OUT_S)) / 60) * 60;
+  }
+  const rank = before.filter(b => b.o.hold === o.hold).length;
+  if (urgent || (rank === 0 && slack < HOLD_OUT_S)) { o.hold = null; o.dir = 'in'; return null; }
+  // (a later time than it was told by three minutes or more: a new one)
+  const est = Math.ceil((e.time + Math.max(60, slack - HOLD_OUT_S)) / 60) * 60; if (est > o.efc + 180 || o.efc < e.time - 30) o.efc = est;
+  return { fix: o.hold, rank, level: Math.min(STACK_TOP_FT, STACK_BASE_FT + 1000 * rank), efc: o.efc };
 }
 /** Miles behind the one ahead below which it is not cleared for the approach. */
 function minNM(e: SimEngine, lead: AircraftState, a: AircraftState, rwy: string): number {

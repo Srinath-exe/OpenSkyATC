@@ -410,8 +410,13 @@ export interface AircraftState {
   holdFixName: string | null;
   holdInboundHdg: number;        // heading aircraft flies TOWARD the fix
   holdTurnDir: 'L' | 'R';       // standard = R
-  holdPhase: 'to_fix' | 'outbound_turn' | 'outbound' | 'inbound_turn' | 'inbound';
-  holdTimer: number;             // seconds elapsed in the outbound leg
+  holdPhase: 'to_fix' | 'teardrop' | 'parallel' | 'parallel_turn' | 'outbound_turn' | 'outbound' | 'inbound_turn' | 'inbound';
+  holdTimer: number;             // seconds in the present leg
+  /** How it entered the hold (holds.ts), and laps flown since. */
+  holdEntry?: 'direct' | 'teardrop' | 'parallel' | null;
+  holdLaps?: number;
+  /** Outbound leg time (s) it has worked out for a one-minute inbound leg. */
+  holdOutS?: number;
 
   // player-commanded values (displayed in data tag even before pilot delay executes)
   cmdAltitude: number | null;

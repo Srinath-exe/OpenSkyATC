@@ -1640,6 +1640,10 @@
   var LANE = 5;
   var WIDE = 8;
   var RUN = 3.46;
+  var HOLD_IN_S = 240;
+  var HOLD_OUT_S = 90;
+  var STACK_BASE_FT = 8e3;
+  var STACK_TOP_FT = 15e3;
   var BOOKS = /* @__PURE__ */ new WeakMap();
   var book = (e) => {
     let b = BOOKS.get(e);
@@ -1712,7 +1716,7 @@
       if (!f) continue;
       let o = bk.own.get(a.id);
       if (!o || e.sameDirection(o.rwy, rwy) === false) {
-        o = { side: f.off >= 0 ? 1 : -1, go: false, dir: f.x > 12 ? "in" : "out", wide: false, rwy, seen: e.time, kt: 0, dog: false };
+        o = { side: f.off >= 0 ? 1 : -1, go: false, dir: f.x > 12 ? "in" : "out", wide: false, rwy, seen: e.time, kt: 0, dog: false, hold: null, efc: 0 };
         bk.own.set(a.id, o);
       }
       if (o.rwy !== rwy) o.rwy = rwy;
@@ -1795,8 +1799,10 @@
       const c = course * RAD, po = pd * side, wx = f.thr.x - (px * Math.sin(c) - po * Math.cos(c)) * NM, wy = f.thr.y - (px * Math.cos(c) + po * Math.sin(c)) * NM;
       return (Math.atan2(wx - a.pos.x, wy - a.pos.y) / RAD + 360) % 360;
     };
-    const base = { rwy: f.rwy, course, side, x, d, place, lead, gapNM: gap, pathNM: way.s, leadNM, slack, leg: "established", hdg: course, level: 3e3, kt: 160, clear: false, go: true };
+    const base = { rwy: f.rwy, course, side, x, d, place, lead, gapNM: gap, pathNM: way.s, leadNM, slack, leg: "established", hdg: course, level: 3e3, kt: 160, clear: false, go: true, hold: null };
     if (est) return base;
+    const h = holdPlan(e, a, o, slack, before);
+    if (h) return { ...base, leg: "hold", hdg: a.heading, level: h.level, kt: 0, clear: false, go: false, hold: h };
     const inwards = way.via !== "out";
     if (o.go && !a.ilsArmed && d > 0.4 && d < 3 && x - d * 1.75 < 5.5) {
       o.go = false;
@@ -1871,6 +1877,31 @@
     const clear = o.go && leg === "final" && x > 5 && x < 24 && Math.abs(d) < 3.4 && ic <= 29.5 && towards && spaced && onLevel;
     return { ...base, leg, hdg: (hdg % 360 + 360) % 360, level, kt, clear, go: o.go };
   }
+  function holdPlan(e, a, o, slack, before) {
+    var _a8;
+    const urgent = !!a.emergency && a.emergency.status !== "resolved";
+    if (!o.hold && a.navMode === "hold" && a.holdFixName && e.publishedHoldAt(a.holdFixName)) {
+      o.hold = a.holdFixName;
+      o.efc = (_a8 = a.holdEfc) != null ? _a8 : e.time + Math.max(60, slack - HOLD_OUT_S);
+    }
+    if (!o.hold) {
+      const fix = a.plan.fix ? e.beacons.find((b) => b.id === a.plan.fix) : null;
+      if (!fix || urgent || o.go || a.ilsArmed || slack < HOLD_IN_S || !e.publishedHoldAt(fix.id)) return null;
+      const toFix = Math.hypot(a.pos.x - fix.x, a.pos.y - fix.y) / NM, out = Math.hypot(a.pos.x - e.centerXY.x, a.pos.y - e.centerXY.y) - Math.hypot(fix.x - e.centerXY.x, fix.y - e.centerXY.y);
+      if (toFix > 12 || out < -2 * NM) return null;
+      o.hold = fix.id;
+      o.efc = Math.ceil((e.time + Math.max(60, slack - HOLD_OUT_S)) / 60) * 60;
+    }
+    const rank = before.filter((b) => b.o.hold === o.hold).length;
+    if (urgent || rank === 0 && slack < HOLD_OUT_S) {
+      o.hold = null;
+      o.dir = "in";
+      return null;
+    }
+    const est = Math.ceil((e.time + Math.max(60, slack - HOLD_OUT_S)) / 60) * 60;
+    if (est > o.efc + 180 || o.efc < e.time - 30) o.efc = est;
+    return { fix: o.hold, rank, level: Math.min(STACK_TOP_FT, STACK_BASE_FT + 1e3 * rank), efc: o.efc };
+  }
   function minNM(e, lead, a, rwy) {
     var _a8, _b;
     const rl = (_b = (_a8 = lead.assignedRunway) != null ? _a8 : lead.plan.runway) != null ? _b : rwy;
@@ -1879,6 +1910,149 @@
   function arrivalPlan(e, a) {
     var _a8;
     return (_a8 = book(e).plans.get(a.id)) != null ? _a8 : null;
+  }
+
+  // src/lib/sim/holds.ts
+  var RAD2 = Math.PI / 180;
+  var NM2 = 1852;
+  var wrap2 = (d) => (d % 360 + 540) % 360 - 180;
+  var norm = (d) => (d % 360 + 360) % 360;
+  var clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  var PUBLISHED = {};
+  function publishedHold(icao, fix, altitudeFt) {
+    var _a8, _b, _c, _d;
+    const o = PUBLISHED[`${icao}/${fix.id}`];
+    const inbound = (_a8 = o == null ? void 0 : o.inbound) != null ? _a8 : fix.holdHeading;
+    if (inbound == null) return null;
+    return { fix: fix.id, inbound: norm(inbound), dir: (_b = o == null ? void 0 : o.dir) != null ? _b : "R", legNM: (_c = o == null ? void 0 : o.legNM) != null ? _c : null, legMin: (o == null ? void 0 : o.legNM) != null ? null : (_d = o == null ? void 0 : o.legMin) != null ? _d : altitudeFt > 14e3 ? 1.5 : 1 };
+  }
+  var holdSpeedKt = (altFt) => altFt <= 6e3 ? 200 : altFt <= 14e3 ? 230 : 265;
+  function holdEntry(headingTrue, inboundTrue, dir) {
+    const d = wrap2(headingTrue - inboundTrue) * (dir === "R" ? 1 : -1);
+    return d > 110 ? "teardrop" : d < -70 ? "parallel" : "direct";
+  }
+  function holdFrame(pos, fix, inboundTrue, dir) {
+    const c = inboundTrue * RAD2, rx = pos.x - fix.x, ry = pos.y - fix.y;
+    const right = rx * Math.cos(c) - ry * Math.sin(c);
+    return { toGo: -(rx * Math.sin(c) + ry * Math.cos(c)), side: dir === "R" ? right : -right };
+  }
+  function drift(trackTrue, tasKt, w2) {
+    const xw = Math.sin(wrap2(w2.dirTrue - trackTrue) * RAD2) * w2.kt;
+    return Math.asin(clamp(xw / Math.max(80, tasKt), -0.5, 0.5)) / RAD2;
+  }
+  var groundKt = (trackTrue, tasKt, w2) => Math.max(60, tasKt - Math.cos(wrap2(w2.dirTrue - trackTrue) * RAD2) * w2.kt);
+  function flyHold(a, dt, w2) {
+    var _a8, _b, _c, _d;
+    const fix = a.holdFix;
+    if (!fix) return;
+    const C = a.holdInboundHdg, O = norm(C + 180), dir = a.holdTurnDir, sgn = dir === "R" ? 1 : -1, other = dir === "R" ? "L" : "R";
+    const legS = a.holdLegMin * 60, d = Math.hypot(a.pos.x - fix.x, a.pos.y - fix.y), toFix = norm(Math.atan2(fix.x - a.pos.x, fix.y - a.pos.y) / RAD2);
+    const f = holdFrame(a.pos, fix, C, dir), tas = a.speed;
+    const steer = (track2) => {
+      a.targetHeading = norm(track2 + drift(track2, tas, w2));
+    };
+    const v = Math.max(140, tas) * 0.5144, rM = v / (Math.min(Math.max(1, a.perf.turnRateAir) * 1.6, 9.81 * Math.tan(25 * RAD2) / v / RAD2) * RAD2), wTo = (w2.dirTrue + 180) * RAD2, c = C * RAD2;
+    const across = (Math.sin(wTo) * Math.cos(c) - Math.cos(wTo) * Math.sin(c)) * sgn * w2.kt * 0.5144;
+    const want = 2 * rM - across * Math.PI * rM / Math.max(70, tas * 0.5144);
+    const outTrack = norm(O - sgn * clamp((want - f.side) * 0.012, -25, 30)), out = norm(outTrack + drift(outTrack, tas, w2));
+    const overFix = d < 400 || d < 3e3 && Math.abs(wrap2(toFix - a.heading)) > 100 && a.holdTimer > 20;
+    switch (a.holdPhase) {
+      case "to_fix":
+        steer(toFix);
+        a.holdTimer += dt;
+        if (overFix || d < 1500 && a.holdTimer > 240) {
+          const e = holdEntry(a.heading, C, dir);
+          a.holdEntry = e;
+          a.holdTimer = 0;
+          if (e === "direct") {
+            a.holdPhase = "outbound_turn";
+            a.turnDir = dir;
+            a.targetHeading = norm(O + drift(O, tas, w2));
+          } else if (e === "teardrop") {
+            a.holdPhase = "teardrop";
+            a.turnDir = null;
+            a.targetHeading = norm(O - 30 * sgn);
+          } else {
+            a.holdPhase = "parallel";
+            a.turnDir = null;
+            a.targetHeading = O;
+          }
+        }
+        break;
+      case "teardrop":
+        a.targetHeading = norm(O - 30 * sgn);
+        a.holdTimer += dt;
+        if (a.holdTimer >= legS) {
+          a.holdPhase = "inbound_turn";
+          a.turnDir = dir;
+          a.targetHeading = C;
+        }
+        break;
+      case "parallel":
+        steer(O);
+        a.holdTimer += dt;
+        if (a.holdTimer >= legS) {
+          a.holdPhase = "parallel_turn";
+          a.turnDir = other;
+          a.targetHeading = norm(C - 40 * sgn);
+        }
+        break;
+      case "parallel_turn":
+        if (Math.abs(wrap2(a.heading - a.targetHeading)) < 8) {
+          a.holdPhase = "inbound";
+          a.turnDir = null;
+          a.holdTimer = -1e9;
+        }
+        break;
+      case "outbound_turn": {
+        const o2 = norm(O + drift(O, tas, w2));
+        a.targetHeading = o2;
+        if (Math.abs(wrap2(a.heading - o2)) < 6) {
+          a.holdPhase = "outbound";
+          a.holdTimer = 0;
+          a.turnDir = null;
+        }
+        break;
+      }
+      case "outbound": {
+        a.targetHeading = out;
+        if (f.toGo >= 0) a.holdTimer += dt;
+        const first = clamp(legS * groundKt(C, tas, w2) / groundKt(O, tas, w2) - 8, legS * 0.4, legS * 1.7);
+        (_a8 = a.holdOutS) != null ? _a8 : a.holdOutS = first;
+        const done = a.holdLegNM != null ? f.toGo >= a.holdLegNM * NM2 : a.holdTimer >= a.holdOutS;
+        if (done) {
+          a.holdPhase = "inbound_turn";
+          a.turnDir = dir;
+          a.targetHeading = C;
+        }
+        break;
+      }
+      case "inbound_turn":
+        a.targetHeading = C;
+        if (Math.abs(wrap2(a.heading - C)) < 40) {
+          a.holdPhase = "inbound";
+          a.turnDir = null;
+          a.holdTimer = 0;
+        }
+        break;
+      case "inbound": {
+        const right = f.side * sgn;
+        steer(f.toGo < 2.5 * NM2 && f.toGo > 300 ? toFix : norm(C - clamp(right * 0.02, -30, 30)));
+        a.holdTimer += dt;
+        if (d < 700 || f.toGo < 150 && Math.abs(f.side) < 0.8 * NM2) {
+          if (a.holdTimer > 0 && a.holdLegNM == null && ((_b = a.holdLaps) != null ? _b : 0) > 0) a.holdOutS = clamp(((_c = a.holdOutS) != null ? _c : legS) + (legS + 12 - a.holdTimer) * 0.8, legS * 0.5, legS * 1.8);
+          a.holdPhase = "outbound_turn";
+          a.turnDir = dir;
+          a.targetHeading = norm(O + drift(O, tas, w2));
+          a.holdTimer = 0;
+          a.holdLaps = ((_d = a.holdLaps) != null ? _d : 0) + 1;
+        } else if (f.toGo < -0.6 * NM2) {
+          a.holdPhase = "to_fix";
+          a.holdTimer = 0;
+        }
+        break;
+      }
+    }
   }
 
   // src/lib/sim/projection.ts
@@ -7770,7 +7944,7 @@
 
   // src/lib/sim/taxiLimits.ts
   var FT = 0.3048;
-  var PUBLISHED = {
+  var PUBLISHED2 = {
     KSFO: [
       { taxiway: "S", between: ["Z", "S2"], maxSpanM: 215 * FT },
       { taxiway: "Z", from: "Z2", toward: 270, maxSpanM: 171 * FT - 0.01, outbound: true }
@@ -7850,7 +8024,7 @@
           this.tails.set(`${o.id}>${n.id}`, v);
         }
       }
-      for (const l of (_b = PUBLISHED[air.icao]) != null ? _b : []) {
+      for (const l of (_b = PUBLISHED2[air.icao]) != null ? _b : []) {
         if (l.from) {
           this.turns.push(l);
           continue;
@@ -8530,11 +8704,11 @@
       const e = this.e, C = LIFE_CONST, w2 = e.wx();
       this.patches = this.patches.filter((p) => p.until > e.time);
       this.cells = this.cells.filter((c) => c.until > e.time);
-      const drift = (p) => {
+      const drift2 = (p) => {
         p.pos = advance(p.pos, (w2.windDirTrue + 180) % 360, w2.windKt * 0.5144);
       };
-      this.patches.forEach(drift);
-      this.cells.forEach(drift);
+      this.patches.forEach(drift2);
+      this.cells.forEach(drift2);
       if (e.time >= this.nextPatch) {
         const rough = Math.min(1.8, 0.7 + (w2.windKt + w2.gustKt) / 40);
         this.nextPatch = e.time + this.between(C.patchEveryS[0], C.patchEveryS[1]) / rough;
@@ -9006,7 +9180,7 @@
     return "wet";
   }
   var norm360 = (d) => (Math.round(d) % 360 + 360) % 360;
-  var clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  var clamp2 = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   var signedDelta = (from, to) => (to - from + 540) % 360 - 180;
   function rwySide(name2) {
     return name2.replace(/[0-9]/g, "");
@@ -9152,21 +9326,21 @@
       while (this.walkAcc >= 60) {
         this.walkAcc -= 60;
         if (!this.front) w2.windDirTrue = norm360(w2.windDirTrue + (this.rng() * 2 - 1) * WX.walkDirDegPerMin * 2);
-        w2.windKt = clamp(w2.windKt + (this.rng() * 2 - 1) * WX.walkSpeedKtPerMin * 2, 0, 60);
-        if (w2.gustKt > 0) w2.gustKt = clamp(w2.gustKt + (this.rng() * 2 - 1) * 1.5, w2.windKt + 5, w2.windKt + 25);
+        w2.windKt = clamp2(w2.windKt + (this.rng() * 2 - 1) * WX.walkSpeedKtPerMin * 2, 0, 60);
+        if (w2.gustKt > 0) w2.gustKt = clamp2(w2.gustKt + (this.rng() * 2 - 1) * 1.5, w2.windKt + 5, w2.windKt + 25);
         w2.qnh += (this.rng() * 2 - 1) * 0.03;
         w2.tempC += (this.rng() * 2 - 1) * 0.06;
         w2.dewC = Math.min(w2.dewC, w2.tempC);
-        if (w2.visM < 1e4 && !this.front) w2.visM = clamp(w2.visM + (this.rng() * 2 - 1) * 150, 100, 1e4);
-        if (w2.ceilingFt != null) w2.ceilingFt = clamp(w2.ceilingFt + (this.rng() * 2 - 1) * 40, 100, 6e3);
+        if (w2.visM < 1e4 && !this.front) w2.visM = clamp2(w2.visM + (this.rng() * 2 - 1) * 150, 100, 1e4);
+        if (w2.ceilingFt != null) w2.ceilingFt = clamp2(w2.ceilingFt + (this.rng() * 2 - 1) * 40, 100, 6e3);
       }
       if (this.front) {
         const f = this.front;
-        const k = clamp((this.time - f.startedAt) / f.durationS, 0, 1);
+        const k = clamp2((this.time - f.startedAt) / f.durationS, 0, 1);
         const eased = k * k * (3 - 2 * k);
         w2.windDirTrue = norm360(f.startDir + signedDelta(f.startDir, f.targetDir) * eased);
         const bump = Math.sin(k * Math.PI) * f.speedBump;
-        w2.windKt = clamp(w2.windKt + bump * (dt / f.durationS) * 2, 0, 60);
+        w2.windKt = clamp2(w2.windKt + bump * (dt / f.durationS) * 2, 0, 60);
         if (k >= 1) {
           this.front = null;
           this.log("front", `frontal passage complete, wind now ${norm360(w2.windDirTrue)}/${Math.round(w2.windKt)}`, { dir: norm360(w2.windDirTrue), kts: Math.round(w2.windKt) });
@@ -9229,7 +9403,7 @@
       if (r < 0.45) {
         const dDir = (this.rng() * 2 - 1) * 30, dKt = (this.rng() * 2 - 1) * 8;
         w2.windDirTrue = norm360(w2.windDirTrue + dDir);
-        w2.windKt = clamp(w2.windKt + dKt, 0, 60);
+        w2.windKt = clamp2(w2.windKt + dKt, 0, 60);
         if (w2.windKt < 2) w2.windKt = 0;
         if (w2.gustKt && w2.gustKt < w2.windKt + 5) w2.gustKt = 0;
         this.log("wind_shift", `wind shift to ${norm360(w2.windDirTrue)}/${Math.round(w2.windKt)}`, { dir: norm360(w2.windDirTrue), kts: Math.round(w2.windKt) });
@@ -9248,10 +9422,10 @@
           w2.visM = Math.round(this.rf(3e3, 8e3) / 100) * 100;
           w2.cloud = w2.cloud === "CAVOK" ? "SCT025" : w2.cloud;
         } else if (w2.visM < 1e4) {
-          w2.visM = clamp(w2.visM * this.rf(1.2, 2.5), 100, 1e4);
+          w2.visM = clamp2(w2.visM * this.rf(1.2, 2.5), 100, 1e4);
           if (w2.visM >= 9500) w2.visM = 1e4;
         }
-        if (w2.ceilingFt != null && this.chance(0.5)) w2.ceilingFt = clamp(Math.round(w2.ceilingFt * this.rf(0.6, 1.6) / 100) * 100, 100, 6e3);
+        if (w2.ceilingFt != null && this.chance(0.5)) w2.ceilingFt = clamp2(Math.round(w2.ceilingFt * this.rf(0.6, 1.6) / 100) * 100, 100, 6e3);
         if (w2.visM >= 1e4 && w2.ceilingFt != null && w2.ceilingFt > 4500 && this.chance(0.4)) {
           w2.ceilingFt = null;
           w2.cloud = "FEW035";
@@ -16125,7 +16299,7 @@
   var TOW_SPEED_MPS = 1.4;
   var TOO_WIDE_COST = 12;
   var AGAINST_FLOW_COST = 4;
-  var ARR_FLOW_PER_FAMILY = 5;
+  var ARR_FLOW_PER_FAMILY = 7;
   var DEP_QUEUE_PER_RUNWAY = 4;
   var AI_CPA_S = 100;
   var AI_CPA_NM = 3.8;
@@ -16168,6 +16342,7 @@
       rtoRecoverAt: null,
       lastLevelAt: 0,
       overshootSaid: false,
+      efcAsked: false,
       locMinXtM: null,
       aiNextAt: 0,
       aiAlt: null,
@@ -17909,6 +18084,11 @@
       let altFt = entry.altFt;
       const inbound = this.aircraft.filter((x) => x.plan.kind === "arrival" && isAirborne(x) && !x.ilsCaptured);
       for (let k = 0; k < 2 && inbound.some((x) => Math.abs(x.altitude - altFt) < 900); k++) altFt += 1e3;
+      const top = this.aircraft.reduce((m, x) => {
+        var _a9;
+        return x.navMode === "hold" && x.holdFixName === entry.beacon ? Math.max(m, (_a9 = x.cmdAltitude) != null ? _a9 : x.targetAltitude) : m;
+      }, 0);
+      if (top && altFt < top + 1e3) altFt = Math.min(16e3, top + 1e3);
       const a = this.spawnArrivalAtEntry(pos, entry.heading, altFt, entry.beacon, { ident, entryKey: entry.key });
       return a;
     }
@@ -20836,17 +21016,36 @@
       this.answerRequest(a, ["hold", "further"]);
       return this.enqueue(a, makeAst("hold", a.callsign, { fix: upper(fix), inbound, dir, legTimeMin, legNM, efc }));
     }
+    /** The hold at a fix as published (holds.ts), or null when the fix has none. */
+    publishedHoldAt(fix, altFt = 9e3) {
+      const b = this.beacons.find((x) => x.id === upper(fix));
+      return b ? publishedHold(this.air.icao, b, altFt) : null;
+    }
     execHold(a, fix, inbound, dir, legTimeMin, legNM, efc) {
+      var _a8, _b, _c, _d, _e, _f;
       const b = this.beacons.find((x) => x.id === upper(fix));
       if (!b) return;
+      const pub = publishedHold(this.air.icao, b, (_a8 = a.cmdAltitude) != null ? _a8 : a.altitude);
+      const inb = (_b = inbound != null ? inbound : pub == null ? void 0 : pub.inbound) != null ? _b : headingTo(a.pos, { x: b.x, y: b.y }), turn = (_c = dir != null ? dir : inbound == null ? pub == null ? void 0 : pub.dir : null) != null ? _c : "R";
+      const legMin = (_d = legTimeMin != null ? legTimeMin : legNM == null && inbound == null ? pub == null ? void 0 : pub.legMin : null) != null ? _d : a.altitude > 14e3 ? 1.5 : 1, legMi = legNM != null ? legNM : legTimeMin == null && inbound == null ? (_e = pub == null ? void 0 : pub.legNM) != null ? _e : null : null;
+      this.sc(a).efcAsked = false;
+      if (a.navMode === "hold" && a.holdFixName === upper(fix) && Math.abs(angleDelta(a.holdInboundHdg, inb)) < 1 && a.holdTurnDir === turn) {
+        a.holdEfc = efc != null ? efc : a.holdEfc;
+        a.holdLegMin = legMin;
+        a.holdLegNM = legMi;
+        return;
+      }
       a.holdFix = { x: b.x, y: b.y };
       a.holdFixName = upper(fix);
-      a.holdInboundHdg = inbound != null ? inbound : headingTo(a.pos, { x: b.x, y: b.y });
-      a.holdTurnDir = dir != null ? dir : "R";
+      a.holdInboundHdg = inb;
+      a.holdTurnDir = turn;
       a.holdPhase = "to_fix";
       a.holdTimer = 0;
-      a.holdLegMin = legTimeMin != null ? legTimeMin : a.altitude > 14e3 ? 1.5 : 1;
-      a.holdLegNM = legNM;
+      a.holdEntry = null;
+      a.holdLaps = 0;
+      a.holdOutS = void 0;
+      a.holdLegMin = legMin;
+      a.holdLegNM = legMi;
       a.holdEfc = efc;
       a.navMode = "hold";
       a.turnDir = null;
@@ -20855,7 +21054,7 @@
         a.goAround = false;
         if (a.phase === "go_around") a.phase = "climb";
       }
-      const hs = a.altitude <= 6e3 ? 200 : a.altitude <= 14e3 ? 230 : 265;
+      const hs = holdSpeedKt(Math.max(a.altitude, (_f = a.cmdAltitude) != null ? _f : 0));
       if (a.cmdIas == null || a.cmdIas > hs) a.targetSpeed = Math.min(a.targetSpeed, hs);
     }
     ilsFor(runway2) {
@@ -21519,60 +21718,18 @@
     }
     // ── nav targets (every substep, before physics) ─────────────────────────────
     applyNavTargets() {
-      var _a8;
+      var _a8, _b;
       for (const a of this.aircraft) {
         if (!isAirborne(a) || a.phase === "landing") continue;
         const s = this.sc(a);
         if (a.navMode === "hold" && a.holdFix) {
-          const fixDist = dist(a.pos, a.holdFix);
-          const hdgToFix = headingTo(a.pos, a.holdFix);
-          const outHdg = (a.holdInboundHdg + 180) % 360;
-          const legS = a.holdLegNM != null ? a.holdLegNM * NM_TO_M / Math.max(60, a.speed * KTS_TO_MPS) : a.holdLegMin * 60;
-          switch (a.holdPhase) {
-            case "to_fix":
-              a.targetHeading = hdgToFix;
-              if (fixDist < 700) {
-                a.holdPhase = "outbound_turn";
-                a.holdTimer = 0;
-                a.turnDir = a.holdTurnDir;
-              }
-              break;
-            case "outbound_turn": {
-              a.targetHeading = outHdg;
-              if (Math.abs(angleDelta(a.heading, outHdg)) < 5) {
-                a.holdPhase = "outbound";
-                a.holdTimer = 0;
-                a.turnDir = null;
-              }
-              break;
-            }
-            case "outbound":
-              a.targetHeading = outHdg;
-              a.holdTimer += FIXED;
-              if (a.holdTimer >= legS) {
-                a.holdPhase = "inbound_turn";
-                a.holdTimer = 0;
-                a.turnDir = a.holdTurnDir;
-              }
-              break;
-            case "inbound_turn": {
-              a.targetHeading = a.holdInboundHdg;
-              if (Math.abs(angleDelta(a.heading, a.holdInboundHdg)) < 5) {
-                a.holdPhase = "inbound";
-                a.turnDir = null;
-              }
-              break;
-            }
-            case "inbound":
-              a.targetHeading = hdgToFix;
-              if (fixDist < 700) {
-                a.holdPhase = "outbound_turn";
-                a.holdTimer = 0;
-                a.turnDir = a.holdTurnDir;
-              }
-              break;
-          }
+          const w2 = this.wx();
+          flyHold(a, FIXED, { dirTrue: w2.windDirTrue, kt: w2.windKt });
           a.delay.holdingS += FIXED;
+          if (a.holdEfc != null && this.time > a.holdEfc + 60 && !s.efcAsked) {
+            s.efcAsked = true;
+            this.raiseRequest(a, "further", null, `${this.telephony(a.callsign)}, holding at ${spokenFix((_a8 = a.holdFixName) != null ? _a8 : "")}, our expect further clearance time has passed, request further clearance.`);
+          }
         }
         if ((a.navMode === "direct" || a.navMode === "visual") && a.directTargetXY) {
           a.targetHeading = headingTo(a.pos, a.directTargetXY);
@@ -21608,7 +21765,7 @@
                 a.ilsCaptured = true;
                 a.turnDir = null;
                 a.holdFix = null;
-                if (((_a8 = a.cmdIas) != null ? _a8 : a.targetSpeed) > 200) {
+                if (((_b = a.cmdIas) != null ? _b : a.targetSpeed) > 200) {
                   a.targetSpeed = 200;
                   a.cmdIas = null;
                 }
@@ -23564,7 +23721,7 @@
      * times, speed before distance, a longer way round before a hold), one at a time.
      */
     aiSequenceArrivals() {
-      var _a8, _b, _c, _d, _e;
+      var _a8, _b, _c, _d, _e, _f;
       const say2 = (a, text, ast, r) => {
         if (r.ok) this.emit("transmission", a, `AI APP: ${text}`, { type: "transmission", ast, result: { ok: true, code: r.code, transmission: "", readback: "" }, who: "ai" }, "AI");
         return r.ok;
@@ -23606,6 +23763,26 @@
           continue;
         }
         const cur = (_b = a.cmdAltitude) != null ? _b : a.targetAltitude;
+        if (p.leg === "hold" && p.hold) {
+          const h = p.hold, mm = String(Math.floor(h.efc / 60) % 60).padStart(2, "0");
+          const hold = () => say2(a, `${a.callsign} hold at ${h.fix} as published, expect further clearance at ${mm}`, makeAst("hold", a.callsign, { fix: h.fix, inbound: null, dir: null, legTimeMin: null, legNM: null, efc: h.efc }), this.cmdHold(a, h.fix, null, null, null, null, h.efc));
+          if (!(a.navMode === "hold" && a.holdFixName === h.fix) || (req == null ? void 0 : req.kind) === "further" || a.holdEfc != null && h.efc > a.holdEfc + 120) {
+            if (hold()) {
+              s.aiNextAt = this.time + 8;
+              continue;
+            }
+          }
+          if (this.time >= ((_c = s.aiAltHoldUntil) != null ? _c : 0)) {
+            const to = h.level < cur - 400 ? this.safeDescent(a, h.level) : h.level > cur + 400 ? this.safeClimb(a, h.level) : cur;
+            if (Math.abs(to - cur) > 400 && say2(a, `${a.callsign} ${to < cur ? "descend" : "climb"} ${to}`, makeAst("altitude", a.callsign, { ft: to }), this.cmdAltitude(a, to, false, null))) {
+              s.aiAlt = to;
+              s.aiNextAt = this.time + 6;
+              continue;
+            }
+          }
+          s.aiNextAt = this.time + 3;
+          continue;
+        }
         if (p.clear && !a.ilsArmed) {
           if (say2(a, `${a.callsign} cleared ILS ${rwy}`, makeAst("ils", a.callsign, { runway: rwy }), this.cmdILS(a, rwy))) {
             s.aiNextAt = this.time + 12;
@@ -23614,12 +23791,12 @@
           }
         }
         const head = a.navMode === "heading" ? a.targetHeading : a.heading, turn = Math.abs(angleDelta(head, p.hdg));
-        const due = turn > (p.leg === "final" ? 5 : p.leg === "base" ? 12 : 10) || (req == null ? void 0 : req.kind) === "further" || a.ilsArmed && this.time - ((_c = s.aiClearedAt) != null ? _c : -1e9) > 150;
+        const due = turn > (p.leg === "final" ? 5 : p.leg === "base" ? 12 : 10) || (req == null ? void 0 : req.kind) === "further" || a.ilsArmed && this.time - ((_d = s.aiClearedAt) != null ? _d : -1e9) > 150;
         const deferred = s.aiDeferFrom != null && this.time - s.aiDeferFrom > 30;
         if (due) {
           const tru = Math.round(p.hdg) % 360, mag3 = ((tru - this.magVar) % 360 + 360) % 360, nearEdge = dist(a.pos, this.centerXY) > this.airspaceRadiusM - 5 * NM_TO_M;
           if (!nearEdge && !deferred && turn > 12 && this.headingConflicts(a, tru)) {
-            (_d = s.aiDeferFrom) != null ? _d : s.aiDeferFrom = this.time;
+            (_e = s.aiDeferFrom) != null ? _e : s.aiDeferFrom = this.time;
           } else {
             s.aiDeferFrom = null;
             const o = a.ilsArmed ? this.cmdCancelApproach(a, tru, cur, null) : this.cmdHeading(a, tru, null, null);
@@ -23630,7 +23807,7 @@
             }
           }
         }
-        if (this.time >= ((_e = s.aiAltHoldUntil) != null ? _e : 0)) {
+        if (this.time >= ((_f = s.aiAltHoldUntil) != null ? _f : 0)) {
           const to = this.safeDescent(a, p.level);
           const up4 = !p.go && (p.leg === "out" || cur < 2900) && cur < 3900 ? !this.altitudeBlocked(a, 4e3) ? 4e3 : cur < 2900 && !this.altitudeBlocked(a, 3e3) ? 3e3 : 0 : 0;
           if (up4 > cur + 400) {
@@ -25494,7 +25671,7 @@ ${BY_POSITION[position]}`;
   };
 
   // src/components/atc/simStore.ts
-  var NM2 = NM_TO_M;
+  var NM3 = NM_TO_M;
   var DEG4 = Math.PI / 180;
   var ATC_AIRPORTS = {
     EGLL: { center: [-0.4543, 51.47], groundZoom: 13.4, name: "Heathrow", city: "London" },
@@ -25944,7 +26121,7 @@ ${BY_POSITION[position]}`;
         radiusM: radar.radiusM,
         centerXY: radar.centerXY,
         ilsRunways,
-        beacons: radar.beacons.map((b) => ({ id: b.id, x: b.x, y: b.y })),
+        beacons: radar.beacons.map((b) => ({ id: b.id, x: b.x, y: b.y, holdHeading: b.holdHeading })),
         entries: radar.entries.map((ep) => ({ x: ep.x, y: ep.y, heading: ep.heading, altFt: ep.altFt, beacon: ep.beacon, weight: ep.weight })),
         magVar: ap.airspace.magVar,
         transitionAltFt: ap.airspace.transitionAltFt,
@@ -25956,7 +26133,7 @@ ${BY_POSITION[position]}`;
     buildRadar(ap, e) {
       const proj = e.proj;
       const centerXY = coordToXY({ kind: "ll", lat: ap.airspace.center.lat, lng: ap.airspace.center.lng }, proj);
-      const radiusM = ap.airspace.radiusNM * NM2;
+      const radiusM = ap.airspace.radiusNM * NM3;
       const beacons = ap.airspace.beacons.map((b) => {
         const p = coordToXY(b.coord, proj);
         return { id: b.id, x: p.x, y: p.y, pron: b.pron, holdHeading: b.holdHeading };
@@ -25974,7 +26151,7 @@ ${BY_POSITION[position]}`;
         shape: a.shape,
         altFt: a.altitudeFt,
         name: a.name,
-        radiusM: a.radiusNM ? a.radiusNM * NM2 : void 0,
+        radiusM: a.radiusNM ? a.radiusNM * NM3 : void 0,
         center: a.center ? coordToXY(a.center, proj) : void 0,
         points: a.points.map((p) => coordToXY(p, proj))
       }));
@@ -27888,7 +28065,7 @@ ${BY_POSITION[position]}`;
 
   // src/game/Tutorial/runner.ts
   var FF_RATE = 12;
-  var norm = (t) => t.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  var norm2 = (t) => t.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
   var KEY = "atc.tutor.progress.v1";
   var readProgress = () => {
     var _a8;
@@ -27948,7 +28125,7 @@ ${BY_POSITION[position]}`;
         this.cmdTap = (cs, r, _who, text) => {
           const L = this.live;
           if (!r.ok || !L || !cs || cs !== L.ctx.cs && !L.ctx.others.includes(cs)) return;
-          this.given.add(norm(text));
+          this.given.add(norm2(text));
           this.gaveCall = true;
           this.hold(false);
         };
@@ -28155,7 +28332,7 @@ ${BY_POSITION[position]}`;
           return (_b = (_a9 = cur.cues) == null ? void 0 : _a9.call(cur, L)) != null ? _b : [];
         }, [])) sendCue(c);
       }
-      this.hold(this.state.stage === "live" && !!(cur == null ? void 0 : cur.hold) && !!phrase && !this.gaveCall && !this.given.has(norm(phrase)));
+      this.hold(this.state.stage === "live" && !!(cur == null ? void 0 : cur.hold) && !!phrase && !this.gaveCall && !this.given.has(norm2(phrase)));
       const answered2 = L.events.some((ev) => ev.type === "readback" && ev.at >= this.curSince && ev.at < L.e.time - 2 && (ev.callsign === L.ctx.cs || L.ctx.others.includes(ev.callsign)));
       const idle = !!cur && (!phrase || answered2) || !cur && this.state.stage === "live";
       const waiting = !!phrase && !answered2 && !!a && a.requests.some((r) => r.answeredAt == null);
@@ -28232,7 +28409,7 @@ ${BY_POSITION[position]}`;
     { id: "tower", title: "Tower" },
     { id: "approach", title: "Approach" }
   ];
-  var RAD2 = Math.PI / 180;
+  var RAD3 = Math.PI / 180;
   function endsOf(e, end) {
     const r = e.runwayByEnd(end);
     if (!r) return null;
@@ -28241,7 +28418,7 @@ ${BY_POSITION[position]}`;
     return { a, b, hdg: r.end.trueHdg };
   }
   var mid = (p, q, t = 0.5) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
-  var look = (hdg) => -hdg * RAD2;
+  var look = (hdg) => -hdg * RAD3;
   function centre(e) {
     const pts = e.air.runways.flatMap((r) => r.ends.map((x) => e.nodeXY(x.nodeId)).filter(Boolean));
     if (!pts.length) return { x: 0, y: 0 };
@@ -28287,7 +28464,7 @@ ${BY_POSITION[position]}`;
       // close and tilted on the 747 at its gate, looking out over the field: the 3D world is the first thing you see
       cues: (e) => {
         const p = at2(e), c = centre(e);
-        return [{ kind: "camera", at: mid(p, c, 0.18), dist: 950, pitch: 0.4, yaw: look(Math.atan2(c.x - p.x, c.y - p.y) / RAD2), ms: 2400 }];
+        return [{ kind: "camera", at: mid(p, c, 0.18), dist: 950, pitch: 0.4, yaw: look(Math.atan2(c.x - p.x, c.y - p.y) / RAD3), ms: 2400 }];
       }
     },
     {
@@ -30283,8 +30460,8 @@ ${BY_POSITION[position]}`;
   }
 
   // src/game/Board/approachCall.ts
-  var NM3 = 1852;
-  var wrap2 = (d) => (d % 360 + 540) % 360 - 180;
+  var NM4 = 1852;
+  var wrap3 = (d) => (d % 360 + 540) % 360 - 180;
   var hdg35 = (h) => String((Math.round(h / 10) * 10 % 360 + 360) % 360 || 360).padStart(3, "0");
   var hdg5 = (h) => String((Math.round(h / 5) * 5 % 360 + 360) % 360 || 360).padStart(3, "0");
   var ord = (n) => n === 1 ? "next to land" : `number ${n}`;
@@ -30302,8 +30479,17 @@ ${BY_POSITION[position]}`;
     };
     if (adv) return adv.cmd ? { cmd: adv.cmd, why: "Traffic: it would pass too close to another one. Move it out of the way now." } : { wait: "Held clear of traffic. It goes on in a moment." };
     const cur = (_a8 = a.cmdAltitude) != null ? _a8 : a.targetAltitude, behind = p.lead ? ` behind ${p.lead.callsign}` : "";
+    if (p.leg === "hold" && p.hold) {
+      const h = p.hold, mm = String(Math.floor(h.efc / 60) % 60).padStart(2, "0"), wait = Math.max(1, Math.round((h.efc - e.time) / 60)), lvl = h.rank === 0 ? "lowest in the stack, leaves first" : `${ord(h.rank + 1).replace("next to land", "first")} in the stack`;
+      if (!(a.navMode === "hold" && a.holdFixName === h.fix)) return { cmd: `${cs} hold at ${h.fix} as published, expect further clearance at ${mm}`, why: `${ord(p.place + 1)}${behind}, with about ${wait} min to lose: too long for speed and a longer way round. It holds at ${h.fix} at ${h.level.toLocaleString("en-US")} ft, ${lvl}.` };
+      if (a.holdEfc != null && h.efc > a.holdEfc + 120) return { cmd: `${cs} hold at ${h.fix} as published, expect further clearance at ${mm}`, why: "Its wait got longer: the same hold, with the new time to expect to leave it. It goes on round as it is." };
+      const to2 = h.level < cur - 400 ? e.safeDescent(a, h.level) : h.level > cur + 400 ? e.safeClimb(a, h.level) : cur;
+      if (to2 < cur - 400) return { cmd: `${cs} descend and maintain ${to2}`, why: `Down to its level in the ${h.fix} stack: ${h.level.toLocaleString("en-US")} ft, a thousand above the one below.` };
+      if (to2 > cur + 400) return { cmd: `${cs} climb and maintain ${to2}`, why: `Up to its level in the ${h.fix} stack, above the ones waiting below.` };
+      return { wait: `Holding at ${h.fix}, ${lvl}. Expect further clearance at :${mm}, in about ${wait} min. The lowest leaves first and the rest step down.` };
+    }
     if (p.clear) return { cmd: `${cs} cleared ILS runway ${p.rwy} approach`, why: "Pointed at the beam, below the glideslope, far enough behind the one ahead: clear the ILS. It flies itself down." };
-    const now3 = a.navMode === "heading" ? a.targetHeading : a.heading, turn = wrap2(p.hdg - now3), fine = p.leg === "final";
+    const now3 = a.navMode === "heading" ? a.targetHeading : a.heading, turn = wrap3(p.hdg - now3), fine = p.leg === "final";
     const why = {
       inbound: `To the downwind for ${p.rwy}, ${ord(p.place + 1)}${behind}.${late(p)}`,
       downwind: p.slack > 12 && p.x > 10 ? `Downwind a little longer: it is ${ord(p.place + 1)}${behind}.${late(p)}` : `Downwind for ${p.rwy}, ${ord(p.place + 1)}${behind}.`,
@@ -30313,7 +30499,8 @@ ${BY_POSITION[position]}`;
       base: `Base leg for ${p.rwy}, ${ord(p.place + 1)}${behind}.`,
       final: `Cuts on to the ${p.rwy} localizer at a gentle angle.`,
       out: `Too near the final to turn in: out to a downwind first.`,
-      established: `On the ${p.rwy} localizer.`
+      established: `On the ${p.rwy} localizer.`,
+      hold: "Holding."
     };
     if (Math.abs(turn) > (fine ? 7 : p.leg === "base" ? 18 : 14) && !e.turnBlocked(a, p.hdg)) return { cmd: `${cs} fly heading ${(fine ? hdg5 : hdg35)(mag3(p.hdg))}`, why: why[p.leg] };
     if (!p.go && (p.leg === "out" || cur < 2900) && cur < 3900) {
@@ -30328,7 +30515,7 @@ ${BY_POSITION[position]}`;
   }
   function departureCall(e, a) {
     var _a8, _b;
-    const cs = a.callsign, top = Math.max(9e3, (_a8 = a.plan.cruiseAlt) != null ? _a8 : 9e3), cmd = (_b = a.cmdAltitude) != null ? _b : a.targetAltitude, out = Math.hypot(a.pos.x - e.centerXY.x, a.pos.y - e.centerXY.y) / NM3;
+    const cs = a.callsign, top = Math.max(9e3, (_a8 = a.plan.cruiseAlt) != null ? _a8 : 9e3), cmd = (_b = a.cmdAltitude) != null ? _b : a.targetAltitude, out = Math.hypot(a.pos.x - e.centerXY.x, a.pos.y - e.centerXY.y) / NM4;
     if (a.handedTo != null) return { wait: "Handed over." };
     const adv = e.airAdvice(a);
     if (adv) return adv.cmd ? { cmd: adv.cmd, why: "Traffic: it would pass too close to another one. Move it out of the way now." } : { wait: "Held clear of traffic. Climb it on in a moment." };

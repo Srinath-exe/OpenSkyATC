@@ -20,6 +20,8 @@ import styles from './WorldMap.module.css';
 import { sim, useSim } from '../simStore';
 import type { AircraftState } from '@/lib/sim/types';
 import { isAirborne } from '@/lib/sim/aircraft';
+import { racetrack, turnRadiusM } from '../ApproachView/geometry';
+import { KTS_TO_MPS, NM_TO_M } from '@/lib/sim/projection';
 import { getPerformance } from '@/lib/sim/aircraftDB';
 import { loadWorld, type World } from './world';
 import { NOSE_WHEEL, genericLights, instantiate, lightsOf, loadAircraftModel, setGear, setModelNight, tint, type LightSpec } from './models';
@@ -653,10 +655,16 @@ export function WorldMap({ standalone = false }: { standalone?: boolean }) {
         const m = markers.get(sel.id);
         if (m) { ring.visible = true; ring.position.copy(m.mesh.position).setY(m.mesh.position.y + 0.5); const rr = Math.max(60, cam.dist * 0.03); ring.scale.set(rr, 1, rr); ring.computeLineDistances(); (ring.material as THREE.LineDashedMaterial).dashSize = rr * 0.12; (ring.material as THREE.LineDashedMaterial).gapSize = rr * 0.08; }
         if (follow && m) { cam.target.x += (m.mesh.position.x - cam.target.x) * Math.min(1, dt * 4); cam.target.z += (m.mesh.position.z - cam.target.z) * Math.min(1, dt * 4); }
-        const key = sel.path ? `${sel.id}:${sel.path.total}:${sel.path.pts.length}` : '';
+        // (holding: its racetrack, at its height; on the ground: its taxi route)
+        const hold = sel.navMode === 'hold' && sel.holdFix ? `h${sel.id}:${sel.holdFixName}:${Math.round(sel.holdInboundHdg)}:${sel.holdTurnDir}:${sel.holdLegMin}:${sel.holdLegNM}:${Math.round(sel.altitude / 500)}:${Math.round(sel.speed / 20)}` : '';
+        const key = hold || (sel.path ? `${sel.id}:${sel.path.total}:${sel.path.pts.length}` : '');
         if (key !== (route?.userData.key ?? '')) {
           if (route) { scene.remove(route); route.geometry.dispose(); route = null; }
-          if (sel.path && sel.path.pts.length > 1 && world) {
+          if (hold && world) {
+            const rM = turnRadiusM(sel.speed, sel.perf.turnRateAir), legM = sel.holdLegNM != null ? sel.holdLegNM * NM_TO_M : Math.max(60, sel.holdLegMin * 60) * Math.max(60, sel.speed) * KTS_TO_MPS;
+            const pts: number[] = []; for (const p of racetrack(sel.holdFix!, sel.holdInboundHdg, sel.holdTurnDir, legM, rM)) { const v = toV3(p.x, p.y, sel.altitude * FT); pts.push(v.x, v.y, v.z); }
+            const g = new LineGeometry(); g.setPositions(pts); route = new Line2(g, routeMat); route.userData.key = key; scene.add(route);
+          } else if (sel.path && sel.path.pts.length > 1 && world) {
             const pts: number[] = []; for (const p of sel.path.pts) { const v = toV3(p.x, p.y, world.heightAt(p.x, p.y) + 1.5); pts.push(v.x, v.y, v.z); }
             const g = new LineGeometry(); g.setPositions(pts); route = new Line2(g, routeMat); route.userData.key = key; scene.add(route);
           }
